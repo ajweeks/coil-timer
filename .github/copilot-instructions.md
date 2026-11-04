@@ -16,7 +16,7 @@ By default, do not build or preview the production build unless explicitly asked
 npm run dev
 ```
 
-- Starts Vite dev server on `http://localhost:5173/`
+- Starts Vite dev server on `http://localhost:5273/`
 - Features hot module reloading
 - Ready in ~0.6 seconds
 

@@ -6,6 +6,7 @@ import {
   Eraser,
   HelpCircle,
   Moon,
+  PictureInPicture2,
   RotateCw,
   Scan,
   Share2,
@@ -90,7 +91,7 @@ const DEFAULT_STATE: TimerState = Object.freeze({
 
 const SpiralTimer = () => {
   // Device capabilities
-  const { isTouchDevice, hasKeyboard } = useDeviceCapabilities();
+  const { isTouchDevice, hasKeyboard, isMobile } = useDeviceCapabilities();
   const [timerModel, setTimerModel] = useLocalStorage('coil-timer-model', TimerModelSchema, {
     state: DEFAULT_STATE,
     restorePoint: DEFAULT_RESTORE_POINT,
@@ -545,6 +546,21 @@ const SpiralTimer = () => {
     }
   };
 
+  // Browsers won't shrink a regular tab window below ~500px wide, but popup windows can go
+  // much smaller. Timer state syncs between windows via localStorage `storage` events.
+  const canPopOut = !isMobile && !isPopoutWindow();
+  const openPopout = () => {
+    const size = 320;
+    const left = Math.max(0, window.screenX + window.outerWidth - size - 40);
+    const top = Math.max(0, window.screenY + 80);
+    const popup = window.open(
+      window.location.href,
+      POPOUT_WINDOW_NAME,
+      `popup,width=${size},height=${size},left=${left},top=${top}`,
+    );
+    popup?.focus();
+  };
+
   const cycleColorScheme = () => {
     const nextScheme = scheme.selected === 'light' ? 'dark' : scheme.selected === 'dark' ? 'auto' : 'light';
     scheme.update(nextScheme);
@@ -860,6 +876,12 @@ const SpiralTimer = () => {
           <Scan size={24} />
         </ToolbarButton>
 
+        {canPopOut && (
+          <ToolbarButton aria-label="Open in a small resizable window" title="Pop out" onClick={openPopout}>
+            <PictureInPicture2 size={24} />
+          </ToolbarButton>
+        )}
+
         <ToolbarButton
           onClick={() => {
             initAudioContext();
@@ -1029,6 +1051,9 @@ const SpiralTimer = () => {
 };
 
 export default SpiralTimer;
+
+const POPOUT_WINDOW_NAME = 'coil-timer-popout';
+const isPopoutWindow = () => window.name === POPOUT_WINDOW_NAME;
 
 const zerosAsOs = (text: string) => text.replaceAll('0', 'O');
 
