@@ -6,7 +6,10 @@ let audioContext: AudioContext | null = null;
 
 const getAudioContext = () => {
   if (!audioContext) {
-    audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
+    const Ctor =
+      window.AudioContext ?? (window as Window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+    if (!Ctor) throw new Error('Web Audio API not supported');
+    audioContext = new Ctor();
   }
   return audioContext;
 };

@@ -58,7 +58,9 @@ export const toRunning = (state: Readonly<PausedState | InteractingState>): Runn
   return { is: 'running', mode: state.mode, endTime: now + state.remainingTime, startedAt: now };
 };
 
-export const toPaused = (state: Readonly<RunningState | InteractingState | FinishedState | PostFinishedState>): Readonly<PausedState> => {
+export const toPaused = (
+  state: Readonly<RunningState | InteractingState | FinishedState | PostFinishedState>,
+): Readonly<PausedState> => {
   if (state.is === 'finished' || state.is === 'postFinished') {
     return { is: 'paused', mode: state.mode, remainingTime: 0 };
   } else if (state.is === 'interacting') {
@@ -81,8 +83,7 @@ export const runningOrPaused = (
   if (is === 'running') {
     const now = Date.now();
     return { is: 'running', mode, endTime: now + remainingTime, startedAt: now };
-  }
-  else return { is: 'paused', mode, remainingTime };
+  } else return { is: 'paused', mode, remainingTime };
 };
 
 export const toFinished = (state: Readonly<RunningState>): Readonly<FinishedState> => {
@@ -90,8 +91,8 @@ export const toFinished = (state: Readonly<RunningState>): Readonly<FinishedStat
 };
 
 export const toPostFinished = (state: Readonly<RunningState>): Readonly<PostFinishedState> => {
-  return { 
-    is: 'postFinished', 
+  return {
+    is: 'postFinished',
     mode: state.mode,
     // Pure running time for this segment: what the timer was set to when it started.
     // Using endTime - startedAt avoids including pause gaps or time spent on

@@ -66,10 +66,14 @@ export const ClockFace = forwardRef<ClockFaceHandle, ClockFaceProps>(
         const width = canvas.offsetWidth;
         const height = canvas.offsetHeight;
 
-        // Resize canvas if needed
-        if (canvas.width !== width * dpr || canvas.height !== height * dpr) {
-          canvas.width = width * dpr;
-          canvas.height = height * dpr;
+        // Resize canvas if needed. Round, because canvas dimensions are integers: with a
+        // fractional DPR (e.g. 125% Windows scaling) the unrounded comparison never matches,
+        // reallocating the backing store on every frame.
+        const pixelWidth = Math.round(width * dpr);
+        const pixelHeight = Math.round(height * dpr);
+        if (canvas.width !== pixelWidth || canvas.height !== pixelHeight) {
+          canvas.width = pixelWidth;
+          canvas.height = pixelHeight;
         }
 
         ctx.resetTransform();

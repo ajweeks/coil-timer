@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import z, { ZodType } from 'zod';
 import deepEqual from './deep-equal';
 
@@ -18,14 +18,18 @@ const load = <S extends ZodType>(key: string, schema: S) => {
 const save = <S extends ZodType>(key: string, schema: S, value: z.infer<S>) => {
   const parsed = schema.safeParse(value);
   if (!parsed.success) {
+    // Keep the last good value in storage rather than wiping it (and the session history with it)
     console.warn(`Failed to save ${key} to storage: Validation failed: ${parsed.error}`);
-    // Clear invalid data to force fresh start
-    localStorage.removeItem(key);
-    return;
+    return false;
   }
 
-  localStorage.setItem(key, JSON.stringify(parsed.data));
-  console.debug(`Saved ${key}`);
+  try {
+    localStorage.setItem(key, JSON.stringify(parsed.data));
+    console.debug(`Saved ${key}`);
+  } catch (e) {
+    console.warn(`Failed to save ${key} to storage: ${e}`);
+  }
+  return true;
 };
 
 export const useLocalStorage = <S extends ZodType>(key: string, schema: S, initial: z.infer<S>) => {
@@ -38,20 +42,33 @@ export const useLocalStorage = <S extends ZodType>(key: string, schema: S, initi
     }
   });
 
+  // `initial` is often an inline literal; keep it in a ref so the listener isn't re-bound every render
+  const initialRef = useRef(initial);
+  initialRef.current = initial;
+
   useEffect(() => {
     const handleStorage = (e: StorageEvent) => {
       if (e.key !== key) return;
-      const value = load(key, schema) ?? initial;
+      let value: z.infer<S>;
+      try {
+        value = load(key, schema) ?? initialRef.current;
+      } catch (err) {
+        console.warn(`Failed to sync ${key} from storage: ${err}`);
+        return;
+      }
       setState((curr) => (deepEqual(curr, value) ? curr : value));
     };
     window.addEventListener('storage', handleStorage);
     return () => window.removeEventListener('storage', handleStorage);
-  }, [initial, key, schema]);
+  }, [key, schema]);
 
-  const saveState = (value: z.infer<S>) => {
-    save(key, schema, value);
-    setState(value);
-  };
+  const saveState = useCallback(
+    (value: z.infer<S>) => {
+      // Don't adopt values that fail validation (e.g. NaN durations)
+      if (save(key, schema, value)) setState(value);
+    },
+    [key, schema],
+  );
 
-  return [state, (value: z.infer<S>) => saveState(value)] as const;
+  return [state, saveState] as const;
 };

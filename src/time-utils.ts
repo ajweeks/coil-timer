@@ -30,12 +30,13 @@ export const formatDurationSr = (ms: number) => {
   const minutes = Math.floor((totalSeconds % 3600) / 60);
   const hours = Math.floor(totalSeconds / 3600);
 
+  // Note: Intl.RelativeTimeFormat produces "in 5 minutes", and previously dropped the minutes
+  // entirely when hours > 0 — so spell the duration out instead.
+  const plural = (n: number, unit: string) => `${n} ${unit}${n === 1 ? '' : 's'}`;
   if (hours > 0) {
-    // e.g. "1 hour 05 minutes" in user's locale
-    return new Intl.RelativeTimeFormat(undefined, { numeric: 'auto' }).format(hours, 'hours');
+    return minutes > 0 ? `${plural(hours, 'hour')} ${plural(minutes, 'minute')}` : plural(hours, 'hour');
   }
-  // e.g. "5 minutes" in user's locale
-  return new Intl.RelativeTimeFormat(undefined, { numeric: 'auto' }).format(minutes, 'minute');
+  return plural(minutes, 'minute');
 };
 
 export const formatTimeSr = (timestamp: number) => {

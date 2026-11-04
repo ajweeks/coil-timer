@@ -15,7 +15,9 @@ export const useWakeLock = ({ enable }: WakeLockParams) => {
   const _enable = enable && isVisible;
 
   useEffect(() => {
-    if (!_enable) return;
+    // navigator.wakeLock is undefined in insecure contexts (e.g. the dev server
+    // over a LAN IP) and in older browsers; calling it would crash the app.
+    if (!_enable || !('wakeLock' in navigator)) return;
 
     const promise = navigator.wakeLock.request('screen').then((sentinel) => {
       console.debug('Screen wake lock acquired');
