@@ -9,7 +9,7 @@ interface ToolbarProps {
   trigger?: ReactNode;
   children: ReactNode;
   className?: string;
-  position?: 'top-right' | 'bottom-left' | 'bottom-right';
+  position?: 'top-right' | 'bottom-left' | 'bottom-right' | 'bottom-center';
 }
 
 export const Toolbar = ({
@@ -20,7 +20,7 @@ export const Toolbar = ({
   trigger,
   children,
   className,
-  position = 'top-right',
+  position = 'top-right' as 'top-right' | 'bottom-left' | 'bottom-right' | 'bottom-center',
 }: ToolbarProps) => {
   const triggerRef = useRef<HTMLDivElement>(null);
 
@@ -81,7 +81,9 @@ export const Toolbar = ({
           ? 'bottom-6 left-6 flex-col-reverse portrait:flex-row'
           : position === 'bottom-right'
             ? 'bottom-6 right-6 flex-col-reverse portrait:flex-row-reverse'
-            : 'top-6 right-6 flex-col portrait:flex-row-reverse',
+            : position === 'bottom-center'
+              ? 'bottom-[20vh] left-1/2 -translate-x-1/2 flex-row gap-8'
+              : 'top-6 right-6 flex-col portrait:flex-row-reverse',
         'transition-all duration-500',
         isVisible ? 'opacity-50 hover:opacity-100 visible' : 'opacity-0 invisible',
         className,

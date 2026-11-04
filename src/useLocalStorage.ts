@@ -19,6 +19,8 @@ const save = <S extends ZodType>(key: string, schema: S, value: z.infer<S>) => {
   const parsed = schema.safeParse(value);
   if (!parsed.success) {
     console.warn(`Failed to save ${key} to storage: Validation failed: ${parsed.error}`);
+    // Clear invalid data to force fresh start
+    localStorage.removeItem(key);
     return;
   }
 

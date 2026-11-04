@@ -9,6 +9,7 @@ const RunningStateSchema = z.object({
   is: z.literal('running'),
   mode: TimerModeSchema,
   endTime: z.number(),
+  startedAt: z.number(), // Date.now() when this run started
 });
 
 const PausedStateSchema = z.object({
@@ -20,6 +21,13 @@ const PausedStateSchema = z.object({
 const FinishedStateSchema = z.object({
   is: z.literal('finished'),
   mode: TimerModeSchema,
+});
+
+const PostFinishedStateSchema = z.object({
+  is: z.literal('postFinished'),
+  mode: TimerModeSchema,
+  completedDuration: z.number(),
+  endedAt: z.number(), // Date.now() when the timer hit zero
 });
 
 const InteractingStateSchema = z.object({
@@ -35,6 +43,7 @@ export const TimerStateSchema = z.union([
   PausedStateSchema,
   FinishedStateSchema,
   InteractingStateSchema,
+  PostFinishedStateSchema,
 ]);
 
 export type TimerState = z.infer<typeof TimerStateSchema>;
@@ -42,14 +51,15 @@ type RunningState = z.infer<typeof RunningStateSchema>;
 type PausedState = z.infer<typeof PausedStateSchema>;
 type FinishedState = z.infer<typeof FinishedStateSchema>;
 type InteractingState = z.infer<typeof InteractingStateSchema>;
+type PostFinishedState = z.infer<typeof PostFinishedStateSchema>;
 
 export const toRunning = (state: Readonly<PausedState | InteractingState>): RunningState => {
-  const endTime = Date.now() + state.remainingTime;
-  return { is: 'running', mode: state.mode, endTime };
+  const now = Date.now();
+  return { is: 'running', mode: state.mode, endTime: now + state.remainingTime, startedAt: now };
 };
 
-export const toPaused = (state: Readonly<RunningState | InteractingState | FinishedState>): Readonly<PausedState> => {
-  if (state.is === 'finished') {
+export const toPaused = (state: Readonly<RunningState | InteractingState | FinishedState | PostFinishedState>): Readonly<PausedState> => {
+  if (state.is === 'finished' || state.is === 'postFinished') {
     return { is: 'paused', mode: state.mode, remainingTime: 0 };
   } else if (state.is === 'interacting') {
     return { is: 'paused', mode: state.mode, remainingTime: state.remainingTime };
@@ -68,12 +78,28 @@ export const runningOrPaused = (
   mode: TimerMode,
   remainingTime: number,
 ): Readonly<RunningState | PausedState> => {
-  if (is === 'running') return { is: 'running', mode, endTime: Date.now() + remainingTime };
+  if (is === 'running') {
+    const now = Date.now();
+    return { is: 'running', mode, endTime: now + remainingTime, startedAt: now };
+  }
   else return { is: 'paused', mode, remainingTime };
 };
 
 export const toFinished = (state: Readonly<RunningState>): Readonly<FinishedState> => {
   return { is: 'finished', mode: state.mode };
+};
+
+export const toPostFinished = (state: Readonly<RunningState>): Readonly<PostFinishedState> => {
+  return { 
+    is: 'postFinished', 
+    mode: state.mode,
+    // Pure running time for this segment: what the timer was set to when it started.
+    // Using endTime - startedAt avoids including pause gaps or time spent on
+    // the finished screen. changeTime preserves startedAt so added/removed time
+    // is reflected correctly.
+    completedDuration: state.endTime - state.startedAt,
+    endedAt: Date.now(),
+  };
 };
 
 export const toInteracting = (state: Readonly<RunningState> | Readonly<PausedState>): Readonly<InteractingState> => {
@@ -94,7 +120,8 @@ export function changeTime(
   const newRemainingTime = clampDuration(mode, remainingTime + delta);
 
   if (state.is === 'running' && newRemainingTime > 0) {
-    return { is: 'running', mode: state.mode, endTime: Date.now() + newRemainingTime };
+    // Preserve original startedAt so accumulated duration stays accurate
+    return { is: 'running', mode: state.mode, endTime: Date.now() + newRemainingTime, startedAt: state.startedAt };
   } else {
     return { is: 'paused', mode: state.mode, remainingTime: newRemainingTime };
   }

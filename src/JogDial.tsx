@@ -57,7 +57,7 @@ export const JogDial = forwardRef<HTMLButtonElement, JogDialProps>(
     const handlePointerDown = (e: React.PointerEvent<HTMLButtonElement>) => {
       e.stopPropagation();
       const pos: v.Vec2Like = [e.clientX, e.clientY];
-      const element = e.target as HTMLElement;
+      const element = e.currentTarget as HTMLElement;
 
       interactionRef.current = { startPos: pos, lastPos: pos, wasDragged: false };
 
@@ -77,7 +77,7 @@ export const JogDial = forwardRef<HTMLButtonElement, JogDialProps>(
       }
 
       if (interaction.wasDragged) {
-        const rect = (e.target as HTMLElement).getBoundingClientRect();
+        const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
         const center = v.mixN2([], [rect.left, rect.top], [rect.right, rect.bottom], 0.5);
         const lastVec = v.sub2([], interaction.lastPos, center);
         const currentVec = v.sub2([], pos, center);
@@ -95,7 +95,7 @@ export const JogDial = forwardRef<HTMLButtonElement, JogDialProps>(
       const wasDragged = interactionRef.current.wasDragged;
       onJogEnd?.({ deltaAngle: 0, wasDragged });
 
-      (e.target as HTMLElement).releasePointerCapture(e.pointerId);
+      (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
       interactionRef.current = null;
     };
 
@@ -110,6 +110,7 @@ export const JogDial = forwardRef<HTMLButtonElement, JogDialProps>(
         title={title}
         className={clsx(
           'touch-none cursor-pointer', // Prevent reload on drag on mobile
+          'focus:outline-none', // Hide focus ring (but keep tabbable for a11y)
           className,
         )}
         onPointerDown={handlePointerDown}

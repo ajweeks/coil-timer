@@ -12,12 +12,15 @@ import {
   Sun,
   SunMoon,
   TimerReset,
+  Volume2,
+  VolumeX,
 } from 'lucide-react';
 import { KeyboardEvent, useCallback, useEffect, useRef, useState } from 'react';
 import { AnimatedColon } from './AnimatedColon';
 import { ClockFace, ClockFaceHandle } from './ClockFace';
 import { HelpScreen } from './HelpScreen';
 import { JogDial, JogEvent } from './JogDial';
+import { initAudioContext, playRingSound } from './sound-utils';
 import {
   formatDuration,
   formatDurationMinutes,
@@ -40,7 +43,7 @@ import {
   clampDuration,
   runningOrPaused,
   TimerState,
-  toFinished,
+  toPostFinished,
   togglePaused,
   toInteracting,
   toPaused,
@@ -67,6 +70,7 @@ const FPS: Record<TimerState['is'], number> = {
   running: 1,
   paused: 1 / 30,
   finished: 60,
+  postFinished: 1 / 30,
 };
 
 const MINUTES_MODE_FPS = {
@@ -90,10 +94,33 @@ const SpiralTimer = () => {
   const [timerModel, setTimerModel] = useLocalStorage('coil-timer-model', TimerModelSchema, {
     state: DEFAULT_STATE,
     restorePoint: DEFAULT_RESTORE_POINT,
+    sessionHistory: [],
   });
   const timerState = timerModel.state;
   const restorePoint = timerModel.restorePoint;
   const scheme = useColorScheme();
+
+  // Reset postFinished on reload (don't show completion buttons on page load)
+  useEffect(() => {
+    if (timerState.is === 'postFinished') {
+      setTimerModel({ ...timerModel, state: DEFAULT_STATE });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Session name: purely local until the user presses Log
+  const [sessionName, setSessionName] = useState('');
+  const sessionInputRef = useRef<HTMLInputElement>(null);
+
+  // Live pending duration for the current session (updates every second when running)
+  const [pendingDuration, setPendingDuration] = useState(0);
+  // Tracks elapsed time of the current partial run (preserved across pauses)
+  const [partialRunMs, setPartialRunMs] = useState(0);
+  const partialRunMsRef = useRef(partialRunMs);
+
+  useEffect(() => {
+    partialRunMsRef.current = partialRunMs;
+  }, [partialRunMs]);
 
   const [srTimeEl, setSrTimeEl] = useState<HTMLElement | null>(null);
   const [timeEl, setTimeEl] = useState<HTMLElement | null>(null);
@@ -108,12 +135,52 @@ const SpiralTimer = () => {
   const [isHelpVisible, setIsHelpVisible] = useState(false);
   const [clockRadius, setClockRadius] = useState<number | null>(null);
 
+  // Track window focus — used to hide decorative UI after a delay when window loses focus
+  const [windowFocused, setWindowFocused] = useState(true);
+  useEffect(() => {
+    let blurTimer: ReturnType<typeof setTimeout>;
+    const onFocus = () => {
+      clearTimeout(blurTimer);
+      setWindowFocused(true);
+    };
+    const onBlur = () => {
+      blurTimer = setTimeout(() => setWindowFocused(false), 3000);
+    };
+    window.addEventListener('focus', onFocus);
+    window.addEventListener('blur', onBlur);
+    return () => {
+      clearTimeout(blurTimer);
+      window.removeEventListener('focus', onFocus);
+      window.removeEventListener('blur', onBlur);
+    };
+  }, []);
+  const [isMuted, setIsMuted] = useState(() => {
+    try {
+      return localStorage.getItem('coil-timer-muted') === 'true';
+    } catch {
+      return false;
+    }
+  });
+
+  // Persist mute state to localStorage
+  useEffect(() => {
+    try {
+      localStorage.setItem('coil-timer-muted', isMuted.toString());
+    } catch {
+      // Silently fail if localStorage is not available
+    }
+  }, [isMuted]);
+
   useWakeLock({ enable: timerState.is === 'running' });
 
   const timerInteractionRef = useRef<TimerInteraction | null>(null);
   const isOrWas = 'was' in timerState ? timerState.was : timerState.is;
+  const timerStateIsRef = useRef(timerState.is);
 
   const hasMounted = useRef(false);
+  useEffect(() => {
+    timerStateIsRef.current = timerState.is;
+  }, [timerState.is]);
   useEffect(() => {
     if (hasMounted.current) {
       setWasRecentlySaved(true);
@@ -129,6 +196,83 @@ const SpiralTimer = () => {
   useEffect(() => {
     setMustShowControls(true);
   }, [timerState.is, setMustShowControls]);
+
+  // (Bell is played directly in runFrame at the running→postFinished transition)
+
+  // Show "0" in the main display when postFinished (total is shown separately below)
+  useEffect(() => {
+    if (timerState.is !== 'postFinished') return;
+    if (timeEl) {
+      timeEl.textContent = zerosAsOs(
+        timerState.mode === 'hours' ? formatDuration(0) : formatDurationMinutes(0)
+      );
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [timerState.is, timeEl]);
+
+  // Track when the current run segment started (to accumulate partial time correctly)
+  const runSegmentStartRef = useRef<number | null>(null);
+  const prevStateRef = useRef<string>(timerState.is);
+
+  // Handle state transitions to accumulate partial run time
+  useEffect(() => {
+    const prevState = prevStateRef.current;
+    const currentState = timerState.is;
+    
+    // Transition to running: start tracking
+    if (currentState === 'running' && prevState !== 'running' && runSegmentStartRef.current === null) {
+      runSegmentStartRef.current = timerState.is === 'running' ? timerState.startedAt : Date.now();
+    }
+    // Transition from running to paused: accumulate
+    else if (currentState === 'paused' && prevState === 'running' && runSegmentStartRef.current !== null) {
+      const segmentElapsed = Date.now() - runSegmentStartRef.current;
+      setPartialRunMs(prev => {
+        const newValue = prev + segmentElapsed;
+        partialRunMsRef.current = newValue;
+        return newValue;
+      });
+      runSegmentStartRef.current = null;
+    }
+    // Transition to postFinished: reset (it's in accumulatedMs now)
+    else if (currentState === 'postFinished' && prevState !== 'postFinished') {
+      setPartialRunMs(0);
+      partialRunMsRef.current = 0;
+      runSegmentStartRef.current = null;
+    }
+    
+    prevStateRef.current = currentState;
+  }, [timerState.is, timerState.is === 'running' ? timerState.startedAt : 0]);
+
+  // Reset partialRunMs when accumulatedMs is reset (after logging)
+  const prevAccumulatedRef = useRef(timerModel.accumulatedMs ?? 0);
+  useEffect(() => {
+    const accumulated = timerModel.accumulatedMs ?? 0;
+    const prevAccumulated = prevAccumulatedRef.current;
+    
+    if (accumulated === 0 && prevAccumulated !== 0) {
+      setPartialRunMs(0);
+      partialRunMsRef.current = 0;
+      runSegmentStartRef.current = null;
+    }
+    
+    prevAccumulatedRef.current = accumulated;
+  }, [timerModel.accumulatedMs]);
+
+  // Update pending duration every second for the history list
+  useEffect(() => {
+    const tick = () => {
+      const accumulated = timerModel.accumulatedMs ?? 0;
+      if (timerStateIsRef.current === 'running' && runSegmentStartRef.current !== null) {
+        const segmentElapsed = Date.now() - runSegmentStartRef.current;
+        setPendingDuration(accumulated + partialRunMsRef.current + segmentElapsed);
+      } else {
+        setPendingDuration(accumulated + partialRunMsRef.current);
+      }
+    };
+    tick();
+    const id = setInterval(tick, 1000);
+    return () => clearInterval(id);
+  }, [timerState.is, timerModel.accumulatedMs, partialRunMs]);
 
   const clampTime = useCallback(
     (time: number) => {
@@ -149,21 +293,28 @@ const SpiralTimer = () => {
       endTime = timerState.endTime;
       remainingTime = timerState.endTime - Date.now();
       if (remainingTime <= 0) {
-        setTimerModel({ ...timerModel, state: toFinished(timerState) });
-        return; // State change will re-run the effect.
+        if (!isMuted) playRingSound();
+        const nextState = toPostFinished(timerState);
+        setTimerModel({
+          ...timerModel,
+          accumulatedMs: (timerModel.accumulatedMs ?? 0) + nextState.completedDuration,
+          state: nextState,
+        });
+        return;
       }
     } else if (timerState.is === 'finished') {
-      // Handle victory animation
-      const deltaTime = 16.67; // Assume ~60 FPS, so ~16.67ms per frame
-
+      const deltaTime = 16.67;
       const animationComplete = clockFace?.stepVictory(deltaTime) ?? false;
       remainingTime = 0;
       endTime = null;
-
       if (animationComplete) {
         setTimerModel({ ...timerModel, state: toPaused(timerState) });
-        return; // State change will re-run the effect.
+        return;
       }
+    } else if (timerState.is === 'postFinished') {
+      // timeEl is driven by the elapsedOverrun interval, not runFrame
+      clockFace?.draw(0);
+      return;
     } else if (timerState.is === 'paused') {
       endTime = timerState.remainingTime + Date.now();
       remainingTime = timerState.remainingTime;
@@ -200,48 +351,67 @@ const SpiralTimer = () => {
     if (endTimeEl && endTime != null) {
       endTimeEl.textContent = zerosAsOs(formatTime(endTime));
     }
-  }, [timerState, clockFace, srTimeEl, timeEl, endTimeEl, timerModel, setTimerModel]);
+  }, [timerState, clockFace, srTimeEl, timeEl, endTimeEl, timerModel, setTimerModel, restorePoint]);
 
   const fpsMap = timerState.mode === 'hours' ? FPS : MINUTES_MODE_FPS;
   useAnimation({ runFrame, fps: fpsMap[timerState.is] });
 
-  // JogDial interaction handlers
-  const handleJogStart = () => {
-    if (timerState.is === 'interacting' || timerState.is === 'finished') return;
-    const remainingTime = timerState.is === 'running' ? timerState.endTime - Date.now() : timerState.remainingTime;
+  // ── JogDial handlers ──────────────────────────────────────────────────────
 
+  const handleJogStart = () => {
+    if (timerState.is === 'interacting') return;
+    // Dragging in postFinished acts as an implicit "continue" — dismiss the
+    // completion screen and start adjusting time immediately.
+    if (timerState.is === 'postFinished') {
+      const startingRemaining = restorePoint[timerState.mode].duration;
+      initAudioContext();
+      timerInteractionRef.current = { remainingTime: startingRemaining, hasChanged: false };
+      const baseState = { is: 'paused' as const, mode: timerState.mode, remainingTime: startingRemaining };
+      // Do NOT add overflow time — accumulatedMs already has the pure running total.
+      setTimerModel({
+        ...timerModel,
+        state: toInteracting(baseState),
+      });
+      return;
+    }
+    const remainingTime = timerState.is === 'running' ? timerState.endTime - Date.now() : timerState.remainingTime;
+    initAudioContext();
     timerInteractionRef.current = { remainingTime, hasChanged: false };
     setTimerModel({ ...timerModel, state: toInteracting(timerState) });
   };
 
   const handleJogMove = (event: JogEvent) => {
     if (timerState.is !== 'interacting' || !timerInteractionRef.current) return;
-
     const timePerRevolution = timerState.mode === 'hours' ? 1 * Hour : 1 * Minute;
     const deltaTime = (event.deltaAngle / math.TAU) * timePerRevolution;
     const newDuration = clampTime(timerInteractionRef.current.remainingTime + deltaTime);
     timerInteractionRef.current.remainingTime = newDuration;
-    timerInteractionRef.current.hasChanged = event.wasDragged; // wasDragged indicates drag threshold was reached
+    timerInteractionRef.current.hasChanged = event.wasDragged;
   };
 
   const handleJogEnd = (event: JogEvent) => {
     if (timerState.is !== 'interacting' || !timerInteractionRef.current) return;
-
     const { remainingTime } = timerInteractionRef.current;
 
     if (event.wasDragged) {
-      // If dragged, round to the nearest minute/second and resume previous state
       const newRemainingTime = clampDuration(timerState.mode, remainingTime);
       const nextRestorePoint: TimerRestorePoint =
         timerState.was === 'paused' && remainingTime > 0
           ? { ...restorePoint, [timerState.mode]: { duration: newRemainingTime } }
           : restorePoint;
-      const nextState = runningOrPaused(timerState.was, timerState.mode, newRemainingTime);
-      setTimerModel({ ...timerModel, state: nextState, restorePoint: nextRestorePoint });
+      
+      // If dragged to zero, pause instead of starting (allows logging accumulated time)
+      if (newRemainingTime === 0) {
+        const nextState = { is: 'paused' as const, mode: timerState.mode, remainingTime: 0 };
+        setTimerModel({ ...timerModel, state: nextState, restorePoint: nextRestorePoint });
+      } else {
+        // After dragging to non-zero, start the timer
+        const nextState = runningOrPaused('running', timerState.mode, newRemainingTime);
+        setTimerModel({ ...timerModel, state: nextState, restorePoint: nextRestorePoint });
+      }
     } else {
-      // If tapped, toggle between running and paused
+      // Tap: toggle pause/resume
       if (timerState.was === 'paused' && remainingTime === 0) {
-        // Click happened after timer had finished
         setTimerModel({
           ...timerModel,
           state: runningOrPaused('paused', timerState.mode, restorePoint[timerState.mode].duration),
@@ -270,20 +440,15 @@ const SpiralTimer = () => {
   };
 
   const handleJogKey = (event: KeyboardEvent<HTMLButtonElement>) => {
-    if (timerState.is === 'interacting' || timerState.is === 'finished') {
-      // Prevent simultaneous interaction
-      return;
-    }
+    if (timerState.is === 'interacting' || timerState.is === 'postFinished') return;
+    initAudioContext();
 
     if (event.key === 'Enter' || event.key === ' ') {
-      // Toggle between running and paused
       if (timerState.is === 'paused' && timerState.remainingTime === 0) {
-        // Activated after timer had finished
         restoreFromLastSetDuration();
       } else {
         setTimerModel({ ...timerModel, state: togglePaused(timerState) });
       }
-
       return;
     }
 
@@ -294,16 +459,8 @@ const SpiralTimer = () => {
 
     const stepSize =
       timerState.mode === 'hours'
-        ? {
-            small: 1 * Minute,
-            medium: 5 * Minutes,
-            large: 1 * Hour,
-          }
-        : {
-            small: 5 * Seconds,
-            medium: 30 * Seconds,
-            large: 5 * Minutes,
-          };
+        ? { small: 1 * Minute, medium: 5 * Minutes, large: 1 * Hour }
+        : { small: 5 * Seconds, medium: 30 * Seconds, large: 5 * Minutes };
 
     let nextState: TimerState | null = null;
     switch (event.key) {
@@ -329,8 +486,60 @@ const SpiralTimer = () => {
     }
   };
 
+  // ── Session actions ───────────────────────────────────────────────────────
+
+  /** Log the completed session, then reset to idle so user can start a new one. */
+  const handleLogSession = () => {
+    if (timerState.is !== 'postFinished' && !(timerState.is === 'paused' && timerState.remainingTime === 0)) return;
+    // accumulatedMs + partialRunMs holds the exact running time
+    const totalMs = (timerModel.accumulatedMs ?? 0) + partialRunMs;
+    const newEntry = {
+      id: Date.now().toString(),
+      duration: totalMs,
+      mode: timerState.mode,
+      name: sessionName.trim() || undefined,
+      timestamp: Date.now(),
+    };
+    setTimerModel({
+      ...timerModel,
+      sessionHistory: [...(timerModel.sessionHistory ?? []), newEntry],
+      accumulatedMs: 0,
+      state: { is: 'paused', mode: timerState.mode, remainingTime: restorePoint[timerState.mode].duration },
+    });
+    setSessionName('');
+    setTimeout(() => sessionInputRef.current?.focus(), 50);
+  };
+
+  /** Dismiss the completion screen and go back to paused with restore point duration. */
+  const handleContinueSession = () => {
+    if (timerState.is !== 'postFinished' && !(timerState.is === 'paused' && timerState.remainingTime === 0)) return;
+    setTimerModel({
+      ...timerModel,
+      state: { is: 'paused', mode: timerState.mode, remainingTime: restorePoint[timerState.mode].duration },
+    });
+  };
+
+  const handleSessionNameChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.value.length <= 150) setSessionName(e.target.value);
+  };
+
+  const handleSessionNameKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      // Move focus to the jog dial so user can drag without clicking elsewhere
+      jogDial?.focus();
+    }
+    // Stop key events from reaching the JogDial behind the input
+    e.stopPropagation();
+  };
+
+  // ── Misc handlers ─────────────────────────────────────────────────────────
+
   const handleBackgroundClicks = useMultiClick({
-    single: () => setMustShowControls((value) => !value),
+    single: () => {
+      initAudioContext();
+      setMustShowControls((value) => !value);
+    },
     double: () => toggleFullscreen(),
     interval: 250 * Milliseconds,
   });
@@ -355,7 +564,6 @@ const SpiralTimer = () => {
     setTimerModel({ ...timerModel, state: changeMode(timerState, nextMode, fallbackDuration) });
   };
 
-  // Wheel gesture handler for adding/subtracting time
   const handleWheel = useCallback(
     (e: WheelEvent) => {
       e.preventDefault();
@@ -363,12 +571,8 @@ const SpiralTimer = () => {
       const delta = e.deltaY;
       const change =
         timerState.mode === 'hours'
-          ? e.shiftKey
-            ? 5 * Minutes
-            : 30 * Seconds
-          : e.shiftKey
-            ? 30 * Seconds
-            : 5 * Seconds;
+          ? e.shiftKey ? 5 * Minutes : 30 * Seconds
+          : e.shiftKey ? 30 * Seconds : 5 * Seconds;
       setTimerModel({ ...timerModel, state: changeTime(timerState.mode, timerState, delta > 0 ? -change : change) });
     },
     [setTimerModel, timerModel, timerState],
@@ -385,8 +589,16 @@ const SpiralTimer = () => {
       }
     : null;
 
-  const controlsAreVisible = timerState.is === 'paused' || mustShowControls;
+  // ── Derived state ─────────────────────────────────────────────────────────
+
+  const controlsAreVisible =
+    timerState.is === 'paused' || mustShowControls || timerState.is === 'postFinished';
   const hint = timerState.is === 'interacting' ? 'end-time' : wasModeRecentlyChanged ? 'precision' : null;
+
+  // (session name is shown in the always-visible input above the dial — no redundant label on dial)
+
+  // Show the name input when idle, running, or after completion (always editable)
+  const showNameInput = timerState.is === 'paused' || timerState.is === 'running' || timerState.is === 'postFinished';
 
   const resetBehavior =
     timerState.is !== 'paused'
@@ -396,6 +608,10 @@ const SpiralTimer = () => {
         : restorePoint[timerState.mode].duration !== DEFAULT_RESTORE_POINT[timerState.mode].duration
           ? 'reset-to-default'
           : null;
+
+  const sessionHistory = timerModel.sessionHistory ?? [];
+
+  // ── Render ────────────────────────────────────────────────────────────────
 
   return (
     <div
@@ -410,14 +626,11 @@ const SpiralTimer = () => {
           <ClockFace
             ref={setClockFace}
             className={clsx(
-              // These are queried by the clock face to theme the canvas
-              'stroke-red-400 dark:stroke-red-500', // Tracks
-              'decoration-gray-700 dark:decoration-white', // Track markers
-              'text-gray-600 dark:text-gray-200', // Clock tick marks
-              'fill-red-100 dark:fill-red-900', // Clock face background (when stopped)
-              'bg-white dark:bg-black', // Background
-              // 'transform',
-              // timerState.is === 'interacting' && 'scale-[99.7%]',
+              'stroke-red-400 dark:stroke-red-500',
+              'decoration-gray-700 dark:decoration-white',
+              'text-gray-600 dark:text-gray-200',
+              'fill-red-100 dark:fill-red-900',
+              'bg-white dark:bg-black',
             )}
             colorScheme={scheme.effective}
             initialTime={timerState.is === 'paused' ? timerState.remainingTime : 0}
@@ -426,56 +639,69 @@ const SpiralTimer = () => {
             isRunning={isOrWas === 'running'}
           />
         )}
+
         <JogDial
           ref={setJogDial}
           aria-label={(() => {
-            // Compose ARIA label based on device
-            if (isTouchDevice && !hasKeyboard) {
-              // Likely a phone/tablet
+            if (isTouchDevice && !hasKeyboard)
               return isOrWas === 'paused'
                 ? 'Timer control: tap to start, drag to adjust time'
                 : 'Timer control: tap to pause, drag to adjust time';
-            } else if (hasKeyboard && !isTouchDevice) {
-              // Likely desktop with keyboard only
+            if (hasKeyboard && !isTouchDevice)
               return isOrWas === 'paused'
                 ? 'Timer control: press space or enter to start, arrow keys to adjust time'
                 : 'Timer control: press space or enter to pause, arrow keys to adjust time';
-            } else if (isTouchDevice && hasKeyboard) {
-              // Convertible or hybrid device
+            if (isTouchDevice && hasKeyboard)
               return isOrWas === 'paused'
                 ? 'Timer control: tap or press space/enter to start, drag or use arrow keys to adjust time'
                 : 'Timer control: tap or press space/enter to pause, drag or use arrow keys to adjust time';
-            } else {
-              // Fallback
-              return isOrWas === 'paused'
-                ? 'Timer control: activate to start, adjust time'
-                : 'Timer control: activate to pause, adjust time';
-            }
+            return isOrWas === 'paused'
+              ? 'Timer control: activate to start, adjust time'
+              : 'Timer control: activate to pause, adjust time';
           })()}
           title="Timer control"
           className={clsx(
             'absolute top-[50vh] left-[50vw] transform -translate-x-1/2 -translate-y-1/2',
             'w-(--clock-diameter) h-(--clock-diameter) rounded-full',
-            'leading-none font-[Inconsolata,monospace] ',
+            'leading-none font-[Inconsolata,monospace]',
             'text-gray-600 dark:text-gray-300 dark:text-shadow-lg/30',
             'transition-opacity duration-500',
-            timerState.is === 'interacting' || controlsAreVisible ? 'opacity-100' : 'opacity-0',
+            'opacity-100',
           )}
           onJogStart={handleJogStart}
           onJogMove={handleJogMove}
           onJogEnd={handleJogEnd}
           onKeyDown={handleJogKey}
         >
-          {/* Use a live screen reader element for the time */}
-          <span ref={setSrTimeEl} className="sr-only" aria-live="polite" aria-atomic="true"></span>
-          {/* Use an element that is hidden from screen readers for the stylized display */}
-          <span aria-hidden="true" className="flex items-center justify-center text-[calc(min(10vh,10vw))]">
+          {/* Screen-reader live region */}
+          <span ref={setSrTimeEl} className="sr-only" aria-live="polite" aria-atomic="true" />
+
+          {/* Time display */}
+          <span
+            aria-hidden="true"
+            className="pointer-events-none flex items-center justify-center text-[calc(min(10vh,10vw))]"
+          >
             <span ref={setTimeEl} />
-            <span className="inline-block w-0 flex items-baseline">
-              <AnimatedColon isRunning={timerState.is === 'running'} />
+            <span className="pointer-events-none inline-block w-0 flex items-baseline">
+              <AnimatedColon isRunning={timerState.is === 'running' && windowFocused} />
             </span>
           </span>
-          <span aria-hidden="true" className="block h-0 text-[calc(min(5vh,5vw))]">
+
+          {/* Total duration shown below the dial in postFinished */}
+          {timerState.is === 'postFinished' && (() => {
+            const totalMs = timerModel.accumulatedMs ?? 0;
+            return (
+              <span
+                aria-hidden="true"
+                className="pointer-events-none absolute top-[calc(50%+3.5rem)] left-1/2 -translate-x-1/2 text-sm font-medium text-gray-600 dark:text-gray-300"
+              >
+                {formatTotalDuration(totalMs)}
+              </span>
+            );
+          })()}
+
+          {/* End-time hint */}
+          <span aria-hidden="true" className="pointer-events-none block h-0 text-[calc(min(5vh,5vw))]">
             <span
               ref={setEndTimeEl}
               className={clsx(
@@ -487,7 +713,9 @@ const SpiralTimer = () => {
               --
             </span>
           </span>
-          <span className="block h-0 text-[calc(min(5vh,5vw))]">
+
+          {/* Precision hint */}
+          <span className="pointer-events-none block h-0 text-[calc(min(5vh,5vw))]">
             <span
               className={clsx(
                 'font-sans font-light',
@@ -500,8 +728,43 @@ const SpiralTimer = () => {
             </span>
           </span>
         </JogDial>
+
+        {/* ── Session name input ── shown when paused or after completion */}
+        {showNameInput && (
+          <div
+            className="absolute top-[calc(50vh-10rem)] left-1/2 -translate-x-1/2 flex flex-col items-center gap-1 z-10"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <input
+              ref={sessionInputRef}
+              type="text"
+              value={sessionName}
+              onChange={handleSessionNameChange}
+              onKeyDown={handleSessionNameKeyDown}
+              placeholder={windowFocused ? 'Session name…' : ''}
+              maxLength={150}
+              className={clsx(
+                'w-56 text-center bg-transparent',
+                'text-gray-700 dark:text-gray-300 placeholder-gray-400 dark:placeholder-gray-600',
+                'text-sm font-medium',
+                'border-b border-transparent',
+                'hover:border-gray-300 dark:hover:border-gray-600',
+                'focus:border-gray-400 dark:focus:border-gray-500',
+                'focus:outline-none',
+                'transition-colors duration-200',
+                'py-1',
+              )}
+            />
+            {sessionName.length > 140 && (
+              <p className="text-xs text-gray-400 dark:text-gray-500">
+                {sessionName.length}/150
+              </p>
+            )}
+          </div>
+        )}
       </div>
 
+      {/* ── Help overlay ── */}
       <HelpScreen
         isHelpVisible={isHelpVisible}
         bgAction={timerState.is === 'running' ? 'controls' : null}
@@ -518,11 +781,11 @@ const SpiralTimer = () => {
         }
         onCloseClicked={() => {
           setIsHelpVisible(false);
-          // Focus jog dial after help closes
           setTimeout(() => jogDial?.focus());
         }}
       />
 
+      {/* ── Top-left toolbar (mode + restore) ── */}
       <Toolbar ariaLabel="Timer controls" isVisible={controlsAreVisible && !isHelpVisible}>
         <ToolbarButton
           onClick={toggleTimerMode}
@@ -548,13 +811,9 @@ const SpiralTimer = () => {
           className="relative"
         >
           {resetBehavior === 'reset-to-default' ? (
-            <>
-              <Eraser size={24} />
-            </>
+            <Eraser size={24} />
           ) : (
-            <>
-              <RotateCw className="transform -rotate-45" size={24} />
-            </>
+            <RotateCw className="transform -rotate-45" size={24} />
           )}
           <CircleCheck
             className={clsx(
@@ -569,6 +828,36 @@ const SpiralTimer = () => {
         </ToolbarButton>
       </Toolbar>
 
+      {/* ── Bottom-center: Log & Continue (when finished or paused at zero with accumulated time) ── */}
+      <Toolbar
+        ariaLabel="Session complete"
+        isVisible={
+          !isHelpVisible &&
+          (timerState.is === 'postFinished' ||
+            (timerState.is === 'paused' && timerState.remainingTime === 0 && (timerModel.accumulatedMs ?? 0) + partialRunMs > 0))
+        }
+        position="bottom-center"
+      >
+        <ToolbarButton
+          onClick={handleLogSession}
+          aria-label="Log this session"
+          title="Log session"
+        >
+          <CircleCheck size={24} />
+          <span className="ml-2 text-sm font-medium">Log</span>
+        </ToolbarButton>
+
+        <ToolbarButton
+          onClick={handleContinueSession}
+          aria-label="Continue without logging"
+          title="Continue"
+        >
+          <RotateCw size={24} />
+          <span className="ml-2 text-sm font-medium">Continue</span>
+        </ToolbarButton>
+      </Toolbar>
+
+      {/* ── Bottom-right: visual/audio controls ── */}
       <Toolbar ariaLabel="Visual controls" isVisible={controlsAreVisible && !isHelpVisible} position="bottom-right">
         <ToolbarButton
           aria-label={document.fullscreenElement ? 'Exit fullscreen' : 'Enter fullscreen'}
@@ -579,34 +868,43 @@ const SpiralTimer = () => {
         </ToolbarButton>
 
         <ToolbarButton
+          onClick={() => {
+            initAudioContext();
+            setIsMuted(!isMuted);
+          }}
+          aria-label={isMuted ? 'Unmute' : 'Mute'}
+          title={isMuted ? 'Unmute' : 'Mute'}
+          className="relative"
+        >
+          <Volume2
+            size={24}
+            className={clsx('transition-opacity duration-200', !isMuted ? 'opacity-100' : 'opacity-0')}
+          />
+          <VolumeX
+            className={clsx('absolute inset-0 transition-opacity duration-200', isMuted ? 'opacity-100' : 'opacity-0')}
+          />
+        </ToolbarButton>
+
+        <ToolbarButton
           onClick={cycleColorScheme}
           aria-label={`Switch to ${scheme.selected === 'light' ? 'dark' : scheme.selected === 'dark' ? 'system' : 'light'} theme`}
           title="Toggle color scheme"
+          className="relative"
         >
           <Sun
             size={24}
-            className={clsx(
-              'transition-opacity duration-200',
-              scheme.selected === 'light' ? 'opacity-100' : 'opacity-0',
-            )}
+            className={clsx('transition-opacity duration-200', scheme.selected === 'light' ? 'opacity-100' : 'opacity-0')}
           />
           <Moon
-            className={clsx(
-              'absolute inset-0',
-              'transition-opacity duration-200',
-              scheme.selected === 'dark' ? 'opacity-100' : 'opacity-0',
-            )}
+            className={clsx('absolute inset-0 transition-opacity duration-200', scheme.selected === 'dark' ? 'opacity-100' : 'opacity-0')}
           />
           <SunMoon
-            className={clsx(
-              'absolute inset-0',
-              'transition-opacity duration-200',
-              scheme.selected === 'auto' ? 'opacity-100' : 'opacity-0',
-            )}
+            className={clsx('absolute inset-0 transition-opacity duration-200', scheme.selected === 'auto' ? 'opacity-100' : 'opacity-0')}
           />
         </ToolbarButton>
       </Toolbar>
 
+      {/* ── Bottom-left: help & share ── */}
       <Toolbar ariaLabel="Help etc." isVisible={controlsAreVisible && !isHelpVisible} position="bottom-left">
         <ToolbarButton
           onClick={() => setIsHelpVisible(true)}
@@ -622,6 +920,100 @@ const SpiralTimer = () => {
           </ToolbarButton>
         )}
       </Toolbar>
+
+      {/* ── Session history — top-left, interactive ── */}
+      {(sessionHistory.length > 0 || pendingDuration > 0 || timerState.is === 'paused' || timerState.is === 'interacting') && (
+        <div
+          className="absolute top-4 left-4 max-h-[40vh] overflow-y-auto z-20 flex flex-col gap-0.5"
+          onClick={(e) => e.stopPropagation()}
+          onPointerDown={(e) => e.stopPropagation()}
+          onPointerMove={(e) => e.stopPropagation()}
+        >
+          {/* Clear buttons */}
+          <div className="flex justify-end gap-2 mb-1">
+            {pendingDuration > 0 && (
+              <button
+                onClick={() => {
+                  setTimerModel({ ...timerModel, accumulatedMs: 0 });
+                  setPartialRunMs(0);
+                  runSegmentStartRef.current = null;
+                }}
+                className="text-[10px] text-gray-400 dark:text-gray-600 hover:text-orange-400 dark:hover:text-orange-400 transition-colors cursor-pointer"
+                aria-label="Clear pending session"
+                title="Clear pending"
+              >
+                clear pending
+              </button>
+            )}
+            <button
+              onClick={() => setTimerModel({ ...timerModel, sessionHistory: [] })}
+              className="text-[10px] text-gray-400 dark:text-gray-600 hover:text-red-400 dark:hover:text-red-400 transition-colors cursor-pointer"
+              aria-label="Clear session history"
+              title="Clear history"
+            >
+              clear all
+            </button>
+          </div>
+          {/* Pending entry (current session, not yet logged) */}
+          {(pendingDuration > 0 || timerState.is === 'paused' || timerState.is === 'interacting') && (
+            <div className="flex items-center gap-2 text-xs text-gray-600 dark:text-gray-300 font-medium mb-1 pb-1 border-b border-gray-200 dark:border-gray-800">
+              <span className="font-mono tabular-nums shrink-0">
+                {formatTotalDuration(pendingDuration)}
+              </span>
+              <span className="text-gray-400 dark:text-gray-600 italic text-[10px]">
+                {sessionName.trim() || 'pending'}
+              </span>
+            </div>
+          )}
+          {[...sessionHistory].reverse().slice(0, 15).map((entry) => (
+            <div
+              key={entry.id}
+              className="flex items-center gap-2 text-xs text-gray-500 dark:text-gray-400 group/row"
+            >
+              <span className="font-mono tabular-nums shrink-0">
+                {formatHistoryDuration(entry.duration, entry.mode)}
+              </span>
+              <input
+                type="text"
+                defaultValue={entry.name ?? ''}
+                placeholder="label…"
+                maxLength={150}
+                onKeyDown={(e) => { e.stopPropagation(); if (e.key === 'Enter') e.currentTarget.blur(); }}
+                onBlur={(e) => {
+                  const newName = e.currentTarget.value.trim() || undefined;
+                  if (newName === entry.name) return;
+                  setTimerModel({
+                    ...timerModel,
+                    sessionHistory: (timerModel.sessionHistory ?? []).map((s) =>
+                      s.id === entry.id ? { ...s, name: newName } : s
+                    ),
+                  });
+                }}
+                className={clsx(
+                  'bg-transparent border-none outline-none',
+                  'w-28 min-w-0 truncate',
+                  'placeholder-gray-300 dark:placeholder-gray-700',
+                  'hover:bg-gray-100/50 dark:hover:bg-white/5 rounded px-1',
+                  'focus:bg-gray-100/70 dark:focus:bg-white/10 rounded px-1',
+                  'transition-colors cursor-text',
+                )}
+              />
+            </div>
+          ))}
+          {/* Total row */}
+          {sessionHistory.length > 1 && (() => {
+            const totalMs = sessionHistory.reduce((sum, e) => sum + e.duration, 0);
+            return (
+              <div className="flex items-center gap-2 text-xs mt-1 pt-1 border-t border-gray-200 dark:border-gray-800">
+                <span className="font-mono tabular-nums shrink-0 text-gray-600 dark:text-gray-300 font-medium">
+                  {formatTotalDuration(totalMs)}
+                </span>
+                <span className="text-gray-400 dark:text-gray-600">total</span>
+              </div>
+            );
+          })()}
+        </div>
+      )}
     </div>
   );
 };
@@ -629,3 +1021,45 @@ const SpiralTimer = () => {
 export default SpiralTimer;
 
 const zerosAsOs = (text: string) => text.replaceAll('0', 'O');
+
+/**
+ * Friendly total duration regardless of mode — shows all non-zero units.
+ * e.g. "1h 22 min 30 sec", "52 min 30 sec", "45 sec"
+ */
+const formatTotalDuration = (ms: number): string => {
+  const totalSeconds = Math.round(ms / 1000);
+  const h = Math.floor(totalSeconds / 3600);
+  const m = Math.floor((totalSeconds % 3600) / 60);
+  const s = totalSeconds % 60;
+  const parts: string[] = [];
+  if (h > 0) parts.push(`${h}h`);
+  if (m > 0) parts.push(`${m} min`);
+  if (s > 0 || parts.length === 0) parts.push(`${s} sec`);
+  return parts.join(' ');
+};
+
+/** Human-readable duration for the history list, e.g. "30 min", "1h 05min", "45 sec" */
+const formatHistoryDuration = (ms: number, mode: 'hours' | 'minutes'): string => {
+  const totalSeconds = Math.round(ms / 1000);
+  const h = Math.floor(totalSeconds / 3600);
+  const m = Math.floor((totalSeconds % 3600) / 60);
+  const s = totalSeconds % 60;
+
+  if (mode === 'hours') {
+    // Show seconds for durations < 10 min to avoid rounding confusion
+    if (h === 0 && m < 10) {
+      if (m > 0 && s > 0) return `${m}min ${s}s`;
+      if (m > 0) return `${m} min`;
+      return `${s} sec`;
+    }
+    // For longer durations, whole minutes are fine
+    if (h > 0 && m > 0) return `${h}h ${m}min`;
+    if (h > 0) return `${h}h`;
+    return `${m} min`;
+  } else {
+    // Minutes mode: always show seconds
+    if (m > 0 && s > 0) return `${m}min ${s}s`;
+    if (m > 0) return `${m} min`;
+    return `${s} sec`;
+  }
+};

@@ -8,6 +8,8 @@ Coil Timer is a React/TypeScript Progressive Web App (PWA) built with Vite. It's
 
 ### Development Workflow
 
+By default, do not build or preview the production build unless explicitly asked to do so.
+
 **Start development server**:
 
 ```bash
