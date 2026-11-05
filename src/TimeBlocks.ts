@@ -123,17 +123,31 @@ export const clearBlocks = (a: TimeAccounting, now: number): TimeAccounting => {
 export const accountTime = <M extends TimeAccounting & { state: TimerState }>(prev: M, next: M, now: number): M => {
   let a: TimeAccounting = { blocks: next.blocks, runningSince: next.runningSince };
   const shouldAccrue = next.state.is === 'running';
+  // Stretch boundaries come from the timer state's own timestamps rather than `now`, so the log
+  // matches the countdown exactly (a full 45:00 run logs 45:00, not 44:59.997 that rounds down)
   if (a.runningSince != null && !shouldAccrue) {
-    // If the end was detected late (e.g. a background tab), don't count time past the end
-    const end = prev.state.is === 'running' ? Math.min(now, prev.state.endTime) : now;
-    a = bank(a, end);
+    let end = now;
+    if (prev.state.is === 'running') {
+      // The moment the timer read the remaining time it stopped at; for the bell that's endTime, which
+      // also avoids counting time past the end if it was detected late (e.g. a background tab)
+      const remaining = 'remainingTime' in next.state ? Math.max(0, next.state.remainingTime) : 0;
+      end = Math.min(now, prev.state.endTime - remaining);
+    }
+    a = bank(a, Math.max(a.runningSince, end));
   } else if (a.runningSince == null && shouldAccrue) {
-    a = startRunning(a, now);
+    const start = next.state.is === 'running' && prev.state.is !== 'running' ? next.state.startedAt : now;
+    a = startRunning(a, Math.min(now, start));
   }
   if (next.state.is === 'postFinished' && prev.state.is !== 'postFinished') {
     // The bell closes the block; the next one carries the label over
-    const open = withOpenBlock(a.blocks).at(-1)!;
-    if (open.ms > 0) a = { ...a, blocks: [...withOpenBlock(a.blocks), newBlock(open.label)] };
+    const blocks = withOpenBlock(a.blocks);
+    const open = blocks.at(-1)!;
+    if (open.ms > 0) {
+      // Snap a run that ends just shy of a whole minute up to it (e.g. 44:59.4 → 45:00)
+      const toNextMinute = (Minutes - (open.ms % Minutes)) % Minutes;
+      const ms = toNextMinute > 0 && toNextMinute <= Seconds ? open.ms + toNextMinute : open.ms;
+      a = { ...a, blocks: [...replaceLast(blocks, { ...open, ms }), newBlock(open.label)] };
+    }
   }
   return { ...next, ...a };
 };

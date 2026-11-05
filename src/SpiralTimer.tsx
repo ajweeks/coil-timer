@@ -275,10 +275,11 @@ const SpiralTimer = () => {
       setTimerModel({ ...timerModel, state: toInteracting(baseState) });
       return;
     }
-    const remainingTime = timerState.is === 'running' ? timerState.endTime - Date.now() : timerState.remainingTime;
     initAudioContext();
-    timerInteractionRef.current = { remainingTime, hasChanged: false };
-    setTimerModel({ ...timerModel, state: toInteracting(timerState) });
+    // Use the same remaining time as the state, so time accounting and the resumed countdown agree
+    const interacting = toInteracting(timerState);
+    timerInteractionRef.current = { remainingTime: interacting.remainingTime, hasChanged: false };
+    setTimerModel({ ...timerModel, state: interacting });
   };
 
   const handleJogMove = (event: JogEvent) => {
