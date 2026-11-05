@@ -11,6 +11,7 @@ Features:
 - **Screen protection:** The display changes subtly to prevent pixels from remaining lit for too long[^protection]
 - **Battery-saving:** Dark mode with a pitch-black background to take advantage of OLED screens
 - **Persistent sessions:** Remembers the end time that you set, even if you close the app — simply re-open it to resume
+- **Time log:** Running time is tracked in labelled blocks (the bell closes a block). Click a duration or label to edit it, merge or delete blocks, and copy the log as text
 - **Nothing to install:** Coil is a progressive web app (PWA) — just [open the web page](https://z0u.github.io/coil-timer) to use it. You can optionally install it by saving it to your home screen.
 
 Controls:

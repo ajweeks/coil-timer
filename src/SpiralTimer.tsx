@@ -1,21 +1,6 @@
 import * as math from '@thi.ng/math';
 import clsx from 'clsx';
-import {
-  CircleCheck,
-  ClockFading,
-  Eraser,
-  HelpCircle,
-  Moon,
-  PictureInPicture2,
-  RotateCw,
-  Scan,
-  Share2,
-  Sun,
-  SunMoon,
-  TimerReset,
-  Volume2,
-  VolumeX,
-} from 'lucide-react';
+import { ClockFading, HelpCircle, PictureInPicture2, Scan, Share2, TimerReset, Volume2, VolumeX } from 'lucide-react';
 import { KeyboardEvent, useCallback, useEffect, useRef, useState } from 'react';
 import { AnimatedColon } from './AnimatedColon';
 import { ClockFace, ClockFaceHandle } from './ClockFace';
@@ -36,7 +21,9 @@ import {
   Minutes,
   Seconds,
 } from './time-utils';
-import { TimerModelSchema } from './TimerModel';
+import { accountTime, setLabel, withOpenBlock } from './TimeBlocks';
+import { LABELS_DATALIST_ID, NO_AUTOFILL, TimeLog, useTimeLogUndo } from './TimeLog';
+import { TimerModel, TimerModelSchema } from './TimerModel';
 import { TimerRestorePoint } from './TimerRestorePoint';
 import {
   changeMode,
@@ -92,12 +79,18 @@ const DEFAULT_STATE: TimerState = Object.freeze({
 const SpiralTimer = () => {
   // Device capabilities
   const { isTouchDevice, hasKeyboard, isMobile } = useDeviceCapabilities();
-  const [timerModel, setTimerModel] = useLocalStorage('coil-timer-model', TimerModelSchema, {
+  const [timerModel, saveTimerModel] = useLocalStorage('coil-timer-model', TimerModelSchema, {
     state: DEFAULT_STATE,
     restorePoint: DEFAULT_RESTORE_POINT,
-    sessionHistory: [],
-    accumulatedMs: 0,
+    blocks: [],
+    runningSince: null,
   });
+  // Every model write goes through time accounting, so running time is tracked whatever changed the timer
+  const setTimerModel = useCallback(
+    (next: TimerModel) => saveTimerModel(accountTime(timerModel, next, Date.now())),
+    [timerModel, saveTimerModel],
+  );
+  const timeLog = useTimeLogUndo(timerModel, (next) => setTimerModel({ ...timerModel, ...next }));
   const timerState = timerModel.state;
   const restorePoint = timerModel.restorePoint;
   const scheme = useColorScheme();
@@ -111,19 +104,7 @@ const SpiralTimer = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Session name: purely local until the user presses Log
-  const [sessionName, setSessionName] = useState('');
-  const sessionInputRef = useRef<HTMLInputElement>(null);
-
-  // Live pending duration for the current session (updates every second when running)
-  const [pendingDuration, setPendingDuration] = useState(0);
-  // Tracks elapsed time of the current partial run (preserved across pauses)
-  const [partialRunMs, setPartialRunMs] = useState(0);
-  const partialRunMsRef = useRef(partialRunMs);
-
-  useEffect(() => {
-    partialRunMsRef.current = partialRunMs;
-  }, [partialRunMs]);
+  const labelInputRef = useRef<HTMLInputElement>(null);
 
   const [srTimeEl, setSrTimeEl] = useState<HTMLElement | null>(null);
   const [timeEl, setTimeEl] = useState<HTMLElement | null>(null);
@@ -133,10 +114,13 @@ const SpiralTimer = () => {
   const [jogDial, setJogDial] = useState<HTMLButtonElement | null>(null);
   const [clockFace, setClockFace] = useState<ClockFaceHandle | null>(null);
   const [wasModeRecentlyChanged, setWasModeRecentlyChanged] = useTemporaryState(false, 2 * Seconds);
-  const [wasRecentlySaved, setWasRecentlySaved] = useTemporaryState(false, 2 * Seconds);
   const [mustShowControls, setMustShowControls] = useTemporaryState(false, 5 * Seconds);
   const [isHelpVisible, setIsHelpVisible] = useState(false);
   const [clockRadius, setClockRadius] = useState<number | null>(null);
+  const [timeLogEl, setTimeLogEl] = useState<HTMLDivElement | null>(null);
+  const timeLogSize = useElementSize(timeLogEl);
+  const viewport = useViewportSize();
+  const clockTop = clockOffsetForLog(viewport, timeLogSize);
 
   // Track window focus — used to hide decorative UI after a delay when window loses focus
   const [windowFocused, setWindowFocused] = useState(true);
@@ -178,19 +162,6 @@ const SpiralTimer = () => {
 
   const timerInteractionRef = useRef<TimerInteraction | null>(null);
   const isOrWas = 'was' in timerState ? timerState.was : timerState.is;
-  const timerStateIsRef = useRef(timerState.is);
-
-  const hasMounted = useRef(false);
-  useEffect(() => {
-    timerStateIsRef.current = timerState.is;
-  }, [timerState.is]);
-  useEffect(() => {
-    if (hasMounted.current) {
-      setWasRecentlySaved(true);
-    } else {
-      hasMounted.current = true;
-    }
-  }, [restorePoint, setWasRecentlySaved]);
 
   useEffect(() => {
     setWasModeRecentlyChanged(true);
@@ -210,60 +181,6 @@ const SpiralTimer = () => {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [timerState.is, timeEl]);
-
-  // Track when the current run segment started (to accumulate partial time correctly)
-  const runSegmentStartRef = useRef<number | null>(null);
-  const runStartedAt = timerState.is === 'running' ? timerState.startedAt : null;
-
-  // Accumulate partial run time across state transitions
-  useEffect(() => {
-    if (runStartedAt !== null) {
-      // Entered running: start tracking this segment
-      if (runSegmentStartRef.current === null) runSegmentStartRef.current = runStartedAt;
-    } else if (timerState.is === 'postFinished') {
-      // Finished: partial time has been folded into accumulatedMs by runFrame
-      setPartialRunMs(0);
-      partialRunMsRef.current = 0;
-      runSegmentStartRef.current = null;
-    } else if (runSegmentStartRef.current !== null) {
-      // Left running (paused, or interacting — tap/drag goes via interacting): bank the segment
-      const next = partialRunMsRef.current + (Date.now() - runSegmentStartRef.current);
-      partialRunMsRef.current = next;
-      setPartialRunMs(next);
-      runSegmentStartRef.current = null;
-    }
-  }, [timerState.is, runStartedAt]);
-
-  // Reset partialRunMs when accumulatedMs is reset (after logging)
-  const prevAccumulatedRef = useRef(timerModel.accumulatedMs ?? 0);
-  useEffect(() => {
-    const accumulated = timerModel.accumulatedMs ?? 0;
-    const prevAccumulated = prevAccumulatedRef.current;
-
-    if (accumulated === 0 && prevAccumulated !== 0) {
-      setPartialRunMs(0);
-      partialRunMsRef.current = 0;
-      runSegmentStartRef.current = null;
-    }
-
-    prevAccumulatedRef.current = accumulated;
-  }, [timerModel.accumulatedMs]);
-
-  // Update pending duration every second for the history list
-  useEffect(() => {
-    const tick = () => {
-      const accumulated = timerModel.accumulatedMs ?? 0;
-      if (timerStateIsRef.current === 'running' && runSegmentStartRef.current !== null) {
-        const segmentElapsed = Date.now() - runSegmentStartRef.current;
-        setPendingDuration(accumulated + partialRunMsRef.current + segmentElapsed);
-      } else {
-        setPendingDuration(accumulated + partialRunMsRef.current);
-      }
-    };
-    tick();
-    const id = setInterval(tick, 1000);
-    return () => clearInterval(id);
-  }, [timerState.is, timerModel.accumulatedMs, partialRunMs]);
 
   const clampTime = useCallback(
     (time: number) => {
@@ -286,13 +203,8 @@ const SpiralTimer = () => {
       if (remainingTime <= 0) {
         if (!isMuted) playRingSound();
         const nextState = toPostFinished(timerState);
-        // completedDuration only covers the final run segment; earlier segments
-        // (before any pauses) live in partialRunMs until now.
-        setTimerModel({
-          ...timerModel,
-          accumulatedMs: (timerModel.accumulatedMs ?? 0) + partialRunMsRef.current + nextState.completedDuration,
-          state: nextState,
-        });
+        // accountTime banks the run (up to endTime) and closes the block
+        setTimerModel({ ...timerModel, state: nextState });
         return;
       }
     } else if (timerState.is === 'finished') {
@@ -360,11 +272,7 @@ const SpiralTimer = () => {
       initAudioContext();
       timerInteractionRef.current = { remainingTime: startingRemaining, hasChanged: false };
       const baseState = { is: 'paused' as const, mode: timerState.mode, remainingTime: startingRemaining };
-      // Do NOT add overflow time — accumulatedMs already has the pure running total.
-      setTimerModel({
-        ...timerModel,
-        state: toInteracting(baseState),
-      });
+      setTimerModel({ ...timerModel, state: toInteracting(baseState) });
       return;
     }
     const remainingTime = timerState.is === 'running' ? timerState.endTime - Date.now() : timerState.remainingTime;
@@ -393,7 +301,7 @@ const SpiralTimer = () => {
           ? { ...restorePoint, [timerState.mode]: { duration: newRemainingTime } }
           : restorePoint;
 
-      // If dragged to zero, pause instead of starting (allows logging accumulated time)
+      // If dragged to zero, pause instead of starting
       if (newRemainingTime === 0) {
         const nextState = { is: 'paused' as const, mode: timerState.mode, remainingTime: 0 };
         setTimerModel({ ...timerModel, state: nextState, restorePoint: nextRestorePoint });
@@ -424,14 +332,6 @@ const SpiralTimer = () => {
     });
   };
 
-  const resetToDefault = () => {
-    if (timerState.is !== 'paused') return;
-    const mode = timerState.mode;
-    const nextRestorePoint = { ...restorePoint, [mode]: DEFAULT_RESTORE_POINT[mode] };
-    const nextState = runningOrPaused('paused', mode, DEFAULT_RESTORE_POINT[mode].duration);
-    setTimerModel({ ...timerModel, restorePoint: nextRestorePoint, state: nextState });
-  };
-
   const handleJogKey = (event: KeyboardEvent<HTMLButtonElement>) => {
     if (timerState.is !== 'running' && timerState.is !== 'paused') return;
     initAudioContext();
@@ -442,11 +342,6 @@ const SpiralTimer = () => {
       } else {
         setTimerModel({ ...timerModel, state: togglePaused(timerState) });
       }
-      return;
-    }
-
-    if (event.key === 'Escape') {
-      restoreFromLastSetDuration();
       return;
     }
 
@@ -479,42 +374,7 @@ const SpiralTimer = () => {
     }
   };
 
-  // ── Session actions ───────────────────────────────────────────────────────
-
-  /** Log the completed session, then reset to idle so user can start a new one. */
-  const handleLogSession = () => {
-    if (timerState.is !== 'postFinished' && !(timerState.is === 'paused' && timerState.remainingTime === 0)) return;
-    // accumulatedMs + partialRunMs holds the exact running time
-    const totalMs = (timerModel.accumulatedMs ?? 0) + partialRunMs;
-    const newEntry = {
-      id: Date.now().toString(),
-      duration: totalMs,
-      mode: timerState.mode,
-      name: sessionName.trim() || undefined,
-      timestamp: Date.now(),
-    };
-    setTimerModel({
-      ...timerModel,
-      sessionHistory: [...(timerModel.sessionHistory ?? []), newEntry],
-      accumulatedMs: 0,
-      state: { is: 'paused', mode: timerState.mode, remainingTime: restorePoint[timerState.mode].duration },
-    });
-    setSessionName('');
-    setTimeout(() => sessionInputRef.current?.focus(), 50);
-  };
-
-  /** Dismiss the completion screen and go back to paused with restore point duration. */
-  const handleContinueSession = () => {
-    if (timerState.is !== 'postFinished' && !(timerState.is === 'paused' && timerState.remainingTime === 0)) return;
-    setTimerModel({
-      ...timerModel,
-      state: { is: 'paused', mode: timerState.mode, remainingTime: restorePoint[timerState.mode].duration },
-    });
-  };
-
-  const handleSessionNameChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.value.length <= 150) setSessionName(e.target.value);
-  };
+  // ── Label input ───────────────────────────────────────────────────────────
 
   const handleSessionNameKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Enter') {
@@ -561,11 +421,6 @@ const SpiralTimer = () => {
     popup?.focus();
   };
 
-  const cycleColorScheme = () => {
-    const nextScheme = scheme.selected === 'light' ? 'dark' : scheme.selected === 'dark' ? 'auto' : 'light';
-    scheme.update(nextScheme);
-  };
-
   const toggleTimerMode = () => {
     if (timerState.is !== 'paused') return;
     const nextMode = timerState.mode === 'hours' ? 'minutes' : 'hours';
@@ -575,6 +430,8 @@ const SpiralTimer = () => {
 
   const handleWheel = useCallback(
     (e: WheelEvent) => {
+      // Let the time log scroll (and handle its own wheel nudges)
+      if ((e.target as Element | null)?.closest?.('[data-time-log]')) return;
       e.preventDefault();
       if (timerState.is !== 'running' && timerState.is !== 'paused') return;
       const delta = e.deltaY;
@@ -609,35 +466,32 @@ const SpiralTimer = () => {
   // ── Derived state ─────────────────────────────────────────────────────────
 
   const controlsAreVisible = timerState.is === 'paused' || mustShowControls || timerState.is === 'postFinished';
+  // When the window isn't focused, show only the clock and the time log
+  const showButtons = controlsAreVisible && !isHelpVisible && windowFocused;
   const hint = timerState.is === 'interacting' ? 'end-time' : wasModeRecentlyChanged ? 'precision' : null;
 
-  // (session name is shown in the always-visible input above the dial — no redundant label on dial)
+  const blocks = withOpenBlock(timerModel.blocks);
+  const openBlock = blocks.at(-1)!;
+  // On the completion screen, show the block that the bell just closed
+  const finishedBlock = timerState.is === 'postFinished' ? blocks.at(-2) : undefined;
 
-  // Show the name input when idle, running, or after completion (always editable)
+  // The label input above the dial edits the open block's label
   const showNameInput = timerState.is === 'paused' || timerState.is === 'running' || timerState.is === 'postFinished';
-
-  const resetBehavior =
-    timerState.is !== 'paused'
-      ? null
-      : timerState.remainingTime !== restorePoint[timerState.mode].duration
-        ? 'restore'
-        : restorePoint[timerState.mode].duration !== DEFAULT_RESTORE_POINT[timerState.mode].duration
-          ? 'reset-to-default'
-          : null;
-
-  const sessionHistory = timerModel.sessionHistory ?? [];
 
   // ── Render ────────────────────────────────────────────────────────────────
 
   return (
     <div
       ref={setContainer}
-      className={clsx('h-screen overflow-hidden', 'text-white', 'flex flex-col items-center justify-center')}
+      className={clsx('h-screen overflow-hidden relative', 'text-white', 'bg-white dark:bg-black')}
       style={{ '--clock-diameter': `${(clockRadius ?? 100) * 2}px` } as React.CSSProperties}
       onClick={handleBackgroundClicks}
     >
       {/* Clock face */}
-      <div className={clsx('w-[100vw] h-[100vh] relative', 'breathe-animation', 'transition-opacity')}>
+      <div
+        className={clsx('absolute left-0 w-[100vw]', 'breathe-animation', 'transition-opacity')}
+        style={{ top: clockTop, height: `calc(100vh - ${clockTop}px)` }}
+      >
         {scheme.effective && (
           <ClockFace
             ref={setClockFace}
@@ -677,7 +531,7 @@ const SpiralTimer = () => {
           })()}
           title="Timer control"
           className={clsx(
-            'absolute top-[50vh] left-[50vw] transform -translate-x-1/2 -translate-y-1/2',
+            'absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2',
             'w-(--clock-diameter) h-(--clock-diameter) rounded-full',
             'leading-none font-[Inconsolata,monospace]',
             'text-gray-600 dark:text-gray-300 dark:text-shadow-lg/30',
@@ -704,18 +558,17 @@ const SpiralTimer = () => {
           </span>
 
           {/* Total duration shown below the dial in postFinished */}
-          {timerState.is === 'postFinished' &&
-            (() => {
-              const totalMs = timerModel.accumulatedMs ?? 0;
-              return (
-                <span
-                  aria-hidden="true"
-                  className="pointer-events-none absolute top-[calc(50%+3.5rem)] left-1/2 -translate-x-1/2 text-sm font-medium text-gray-600 dark:text-gray-300"
-                >
-                  {formatTotalDuration(totalMs)}
-                </span>
-              );
-            })()}
+          {finishedBlock && (
+            <span
+              aria-hidden="true"
+              className="pointer-events-none absolute top-[calc(50%+3.5rem)] left-1/2 -translate-x-1/2 text-sm font-medium text-gray-600 dark:text-gray-300 whitespace-nowrap"
+            >
+              {formatTotalDuration(finishedBlock.ms)}
+              {finishedBlock.label && (
+                <span className="text-gray-400 dark:text-gray-500"> · {finishedBlock.label}</span>
+              )}
+            </span>
+          )}
 
           {/* End-time hint */}
           <span aria-hidden="true" className="pointer-events-none block h-0 text-[calc(min(5vh,5vw))]">
@@ -749,16 +602,26 @@ const SpiralTimer = () => {
         {/* ── Session name input ── shown when paused or after completion */}
         {showNameInput && (
           <div
-            className="absolute top-[calc(50vh-10rem)] left-1/2 -translate-x-1/2 flex flex-col items-center gap-1 z-10"
+            className="absolute top-[calc(50%-min(10rem,var(--clock-diameter)*0.3))] left-1/2 -translate-x-1/2 flex flex-col items-center gap-1 z-10"
             onClick={(e) => e.stopPropagation()}
           >
             <input
-              ref={sessionInputRef}
+              ref={labelInputRef}
               type="text"
-              value={sessionName}
-              onChange={handleSessionNameChange}
+              {...NO_AUTOFILL}
+              list={LABELS_DATALIST_ID}
+              value={openBlock.label ?? ''}
+              onChange={(e) =>
+                timeLog.commit(setLabel(timerModel, openBlock.id, e.target.value), `label:${openBlock.id}`)
+              }
+              onBlur={(e) => {
+                const trimmed = e.currentTarget.value.trim();
+                if (trimmed !== (openBlock.label ?? ''))
+                  timeLog.commit(setLabel(timerModel, openBlock.id, trimmed), `label:${openBlock.id}`);
+              }}
               onKeyDown={handleSessionNameKeyDown}
-              placeholder={windowFocused ? 'Session name…' : ''}
+              aria-label="Label for the current block"
+              placeholder={windowFocused ? 'What are you working on?' : ''}
               maxLength={150}
               className={clsx(
                 'w-56 text-center bg-transparent',
@@ -772,9 +635,6 @@ const SpiralTimer = () => {
                 'py-1',
               )}
             />
-            {sessionName.length > 140 && (
-              <p className="text-xs text-gray-400 dark:text-gray-500">{sessionName.length}/150</p>
-            )}
           </div>
         )}
       </div>
@@ -801,7 +661,7 @@ const SpiralTimer = () => {
       />
 
       {/* ── Top-left toolbar (mode + restore) ── */}
-      <Toolbar ariaLabel="Timer controls" isVisible={controlsAreVisible && !isHelpVisible}>
+      <Toolbar ariaLabel="Timer controls" isVisible={showButtons}>
         <ToolbarButton
           onClick={toggleTimerMode}
           aria-label={`Switch to ${timerState.mode === 'hours' ? 'minutes' : 'hours'} mode`}
@@ -810,64 +670,10 @@ const SpiralTimer = () => {
         >
           {timerState.mode === 'hours' ? <ClockFading size={24} /> : <TimerReset size={24} />}
         </ToolbarButton>
-
-        <ToolbarButton
-          onClick={() => {
-            if (resetBehavior === 'reset-to-default') resetToDefault();
-            else if (resetBehavior === 'restore') restoreFromLastSetDuration();
-            jogDial?.focus();
-          }}
-          aria-label={
-            resetBehavior === 'reset-to-default' ? 'Reset to default duration' : 'Restore from last set duration'
-          }
-          title={resetBehavior === 'reset-to-default' ? 'Reset' : 'Restore last'}
-          disabled={resetBehavior == null}
-          highlight={wasRecentlySaved}
-          className="relative"
-        >
-          {resetBehavior === 'reset-to-default' ? (
-            <Eraser size={24} />
-          ) : (
-            <RotateCw className="transform -rotate-45" size={24} />
-          )}
-          <CircleCheck
-            className={clsx(
-              'absolute -top-1 -right-1',
-              'text-blue-600 dark:text-blue-300 fill-white dark:fill-black',
-              'transition-all duration-200',
-              wasRecentlySaved ? 'opacity-100' : 'opacity-0',
-            )}
-            size={16}
-            strokeWidth={(2 * 24) / 16}
-          />
-        </ToolbarButton>
-      </Toolbar>
-
-      {/* ── Bottom-center: Log & Continue (when finished or paused at zero with accumulated time) ── */}
-      <Toolbar
-        ariaLabel="Session complete"
-        isVisible={
-          !isHelpVisible &&
-          (timerState.is === 'postFinished' ||
-            (timerState.is === 'paused' &&
-              timerState.remainingTime === 0 &&
-              (timerModel.accumulatedMs ?? 0) + partialRunMs > 0))
-        }
-        position="bottom-center"
-      >
-        <ToolbarButton onClick={handleLogSession} aria-label="Log this session" title="Log session">
-          <CircleCheck size={24} />
-          <span className="ml-2 text-sm font-medium">Log</span>
-        </ToolbarButton>
-
-        <ToolbarButton onClick={handleContinueSession} aria-label="Continue without logging" title="Continue">
-          <RotateCw size={24} />
-          <span className="ml-2 text-sm font-medium">Continue</span>
-        </ToolbarButton>
       </Toolbar>
 
       {/* ── Bottom-right: visual/audio controls ── */}
-      <Toolbar ariaLabel="Visual controls" isVisible={controlsAreVisible && !isHelpVisible} position="bottom-right">
+      <Toolbar ariaLabel="Visual controls" isVisible={showButtons} position="bottom-right">
         <ToolbarButton
           aria-label={document.fullscreenElement ? 'Exit fullscreen' : 'Enter fullscreen'}
           title="Fullscreen"
@@ -899,37 +705,10 @@ const SpiralTimer = () => {
             className={clsx('absolute inset-0 transition-opacity duration-200', isMuted ? 'opacity-100' : 'opacity-0')}
           />
         </ToolbarButton>
-
-        <ToolbarButton
-          onClick={cycleColorScheme}
-          aria-label={`Switch to ${scheme.selected === 'light' ? 'dark' : scheme.selected === 'dark' ? 'system' : 'light'} theme`}
-          title="Toggle color scheme"
-          className="relative"
-        >
-          <Sun
-            size={24}
-            className={clsx(
-              'transition-opacity duration-200',
-              scheme.selected === 'light' ? 'opacity-100' : 'opacity-0',
-            )}
-          />
-          <Moon
-            className={clsx(
-              'absolute inset-0 transition-opacity duration-200',
-              scheme.selected === 'dark' ? 'opacity-100' : 'opacity-0',
-            )}
-          />
-          <SunMoon
-            className={clsx(
-              'absolute inset-0 transition-opacity duration-200',
-              scheme.selected === 'auto' ? 'opacity-100' : 'opacity-0',
-            )}
-          />
-        </ToolbarButton>
       </Toolbar>
 
       {/* ── Bottom-left: help & share ── */}
-      <Toolbar ariaLabel="Help etc." isVisible={controlsAreVisible && !isHelpVisible} position="bottom-left">
+      <Toolbar ariaLabel="Help etc." isVisible={showButtons} position="bottom-left">
         <ToolbarButton
           onClick={() => setIsHelpVisible(true)}
           aria-label={isHelpVisible ? 'Hide instructions' : 'Show instructions'}
@@ -945,107 +724,18 @@ const SpiralTimer = () => {
         )}
       </Toolbar>
 
-      {/* ── Session history — top-left, interactive ── */}
-      {(sessionHistory.length > 0 ||
-        pendingDuration > 0 ||
-        timerState.is === 'paused' ||
-        timerState.is === 'interacting') && (
-        <div
-          className="absolute top-4 left-4 max-h-[40vh] overflow-y-auto z-20 flex flex-col gap-0.5"
-          onClick={(e) => e.stopPropagation()}
-          onPointerDown={(e) => e.stopPropagation()}
-          onPointerMove={(e) => e.stopPropagation()}
-        >
-          {/* Clear buttons */}
-          <div className="flex justify-end gap-2 mb-1">
-            {pendingDuration > 0 && (
-              <button
-                onClick={() => {
-                  setTimerModel({ ...timerModel, accumulatedMs: 0 });
-                  setPartialRunMs(0);
-                  runSegmentStartRef.current = null;
-                }}
-                className="text-[10px] text-gray-400 dark:text-gray-600 hover:text-orange-400 dark:hover:text-orange-400 transition-colors cursor-pointer"
-                aria-label="Clear pending session"
-                title="Clear pending"
-              >
-                clear pending
-              </button>
-            )}
-            <button
-              onClick={() => setTimerModel({ ...timerModel, sessionHistory: [] })}
-              className="text-[10px] text-gray-400 dark:text-gray-600 hover:text-red-400 dark:hover:text-red-400 transition-colors cursor-pointer"
-              aria-label="Clear session history"
-              title="Clear history"
-            >
-              clear all
-            </button>
-          </div>
-          {/* Pending entry (current session, not yet logged) */}
-          {(pendingDuration > 0 || timerState.is === 'paused' || timerState.is === 'interacting') && (
-            <div className="flex items-center gap-2 text-xs text-gray-600 dark:text-gray-300 font-medium mb-1 pb-1 border-b border-gray-200 dark:border-gray-800">
-              <span className="font-mono tabular-nums shrink-0">{formatTotalDuration(pendingDuration)}</span>
-              <span className="text-gray-400 dark:text-gray-600 italic text-[10px]">
-                {sessionName.trim() || 'pending'}
-              </span>
-            </div>
-          )}
-          {[...sessionHistory]
-            .reverse()
-            .slice(0, 15)
-            .map((entry) => (
-              <div
-                key={entry.id}
-                className="flex items-center gap-2 text-xs text-gray-500 dark:text-gray-400 group/row"
-              >
-                <span className="font-mono tabular-nums shrink-0">
-                  {formatHistoryDuration(entry.duration, entry.mode)}
-                </span>
-                <input
-                  type="text"
-                  defaultValue={entry.name ?? ''}
-                  placeholder="label…"
-                  maxLength={150}
-                  onKeyDown={(e) => {
-                    e.stopPropagation();
-                    if (e.key === 'Enter') e.currentTarget.blur();
-                  }}
-                  onBlur={(e) => {
-                    const newName = e.currentTarget.value.trim() || undefined;
-                    if (newName === entry.name) return;
-                    setTimerModel({
-                      ...timerModel,
-                      sessionHistory: (timerModel.sessionHistory ?? []).map((s) =>
-                        s.id === entry.id ? { ...s, name: newName } : s,
-                      ),
-                    });
-                  }}
-                  className={clsx(
-                    'bg-transparent border-none outline-none',
-                    'w-28 min-w-0 truncate',
-                    'placeholder-gray-300 dark:placeholder-gray-700',
-                    'hover:bg-gray-100/50 dark:hover:bg-white/5 rounded px-1',
-                    'focus:bg-gray-100/70 dark:focus:bg-white/10 rounded px-1',
-                    'transition-colors cursor-text',
-                  )}
-                />
-              </div>
-            ))}
-          {/* Total row */}
-          {sessionHistory.length > 1 &&
-            (() => {
-              const totalMs = sessionHistory.reduce((sum, e) => sum + e.duration, 0);
-              return (
-                <div className="flex items-center gap-2 text-xs mt-1 pt-1 border-t border-gray-200 dark:border-gray-800">
-                  <span className="font-mono tabular-nums shrink-0 text-gray-600 dark:text-gray-300 font-medium">
-                    {formatTotalDuration(totalMs)}
-                  </span>
-                  <span className="text-gray-400 dark:text-gray-600">total</span>
-                </div>
-              );
-            })()}
-        </div>
-      )}
+      {/* ── Time log — top-left ── */}
+      {/* Always mounted (it hides itself when empty) so undo and the N shortcut survive */}
+      <TimeLog
+        ref={setTimeLogEl}
+        className={clsx('absolute top-4 left-4 z-20', isHelpVisible && 'hidden')}
+        showControls={windowFocused}
+        accounting={timerModel}
+        commit={timeLog.commit}
+        undo={timeLog.undo}
+        toast={timeLog.toast}
+        onSplit={() => setTimeout(() => labelInputRef.current?.focus(), 0)}
+      />
     </div>
   );
 };
@@ -1073,28 +763,43 @@ const formatTotalDuration = (ms: number): string => {
   return parts.join(' ');
 };
 
-/** Human-readable duration for the history list, e.g. "30 min", "1h 05min", "45 sec" */
-const formatHistoryDuration = (ms: number, mode: 'hours' | 'minutes'): string => {
-  const totalSeconds = Math.round(ms / 1000);
-  const h = Math.floor(totalSeconds / 3600);
-  const m = Math.floor((totalSeconds % 3600) / 60);
-  const s = totalSeconds % 60;
+const TIME_LOG_INSET = 16;
+const TIME_LOG_GAP = 12;
 
-  if (mode === 'hours') {
-    // Show seconds for durations < 10 min to avoid rounding confusion
-    if (h === 0 && m < 10) {
-      if (m > 0 && s > 0) return `${m}min ${s}s`;
-      if (m > 0) return `${m} min`;
-      return `${s} sec`;
-    }
-    // For longer durations, whole minutes are fine
-    if (h > 0 && m > 0) return `${h}h ${m}min`;
-    if (h > 0) return `${h}h`;
-    return `${m} min`;
-  } else {
-    // Minutes mode: always show seconds
-    if (m > 0 && s > 0) return `${m}min ${s}s`;
-    if (m > 0) return `${m} min`;
-    return `${s} sec`;
-  }
+/** How far to push the clock down so it doesn't overlap the time log (0 if there's room beside it). */
+const clockOffsetForLog = (viewport: Size, log: Size): number => {
+  if (log.width === 0 || log.height === 0) return 0;
+  const radius = (Math.min(viewport.width, viewport.height) / 2) * 0.9; // ClockFace's outer tick diameter
+  const cx = viewport.width / 2;
+  const cy = viewport.height / 2;
+  const right = TIME_LOG_INSET + log.width;
+  const bottom = TIME_LOG_INSET + log.height;
+  // Distance from the clock's center to the nearest point of the log's box
+  const dx = cx - Math.min(cx, right);
+  const dy = cy - Math.min(cy, bottom);
+  if (Math.hypot(dx, dy) > radius + TIME_LOG_GAP) return 0;
+  return bottom + TIME_LOG_GAP;
+};
+
+type Size = { width: number; height: number };
+
+const useElementSize = (el: HTMLElement | null): Size => {
+  const [size, setSize] = useState<Size>({ width: 0, height: 0 });
+  useEffect(() => {
+    if (!el) return;
+    const observer = new ResizeObserver(() => setSize({ width: el.offsetWidth, height: el.offsetHeight }));
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [el]);
+  return size;
+};
+
+const useViewportSize = (): Size => {
+  const [size, setSize] = useState<Size>(() => ({ width: window.innerWidth, height: window.innerHeight }));
+  useEffect(() => {
+    const onResize = () => setSize({ width: window.innerWidth, height: window.innerHeight });
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
+  return size;
 };
