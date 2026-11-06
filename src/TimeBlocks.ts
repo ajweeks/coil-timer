@@ -227,5 +227,6 @@ export const formatMinutes = (ms: number): string => {
   const total = Math.round(ms / Minutes);
   const h = Math.floor(total / 60);
   const m = total % 60;
-  return h > 0 ? `${h}h ${m.toString().padStart(2, '0')}m` : `${m}m`;
+  if (h === 0) return `${m}m`;
+  return m === 0 ? `${h}h` : `${h}h ${m.toString().padStart(2, '0')}m`;
 };

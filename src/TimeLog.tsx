@@ -105,6 +105,15 @@ export const useTimeLogUndo = (accounting: TimeAccounting, onChange: (next: Time
   return { commit, undo, toast };
 };
 
+// ── Activity colours ─────────────────────────────────────────────────────────
+
+/** Mid-tone hues that read on both light and dark backgrounds, assigned in order of first appearance */
+const ACTIVITY_COLORS = ['#60a5fa', '#f59e0b', '#34d399', '#a78bfa', '#f472b6', '#22d3ee', '#a3e635', '#fb923c'];
+const UNLABELLED_COLOR = '#9ca3af80';
+
+const activityColor = (label: string, index: number) =>
+  label === 'unlabelled' ? UNLABELLED_COLOR : ACTIVITY_COLORS[index % ACTIVITY_COLORS.length];
+
 // ── Time log ─────────────────────────────────────────────────────────────────
 
 /** Live-updating clock, ticking once a second while the timer runs. */
@@ -178,7 +187,7 @@ export const TimeLog = ({ ref, accounting, commit, undo, toast, showControls, on
     <div
       ref={ref}
       data-time-log
-      className={clsx('flex flex-col gap-0.5 text-xs text-gray-500 dark:text-gray-400', className)}
+      className={clsx('flex flex-col gap-0.5 text-xs text-gray-500 dark:text-gray-400 select-none', className)}
       onClick={(e) => e.stopPropagation()}
       onPointerDown={(e) => e.stopPropagation()}
       onPointerMove={(e) => e.stopPropagation()}
@@ -205,15 +214,31 @@ export const TimeLog = ({ ref, accounting, commit, undo, toast, showControls, on
 
       {/* Totals */}
       <div className="mt-1 pt-1 border-t border-gray-200 dark:border-gray-800 flex flex-col gap-0.5 max-w-64">
-        {labelTotals.length > 1 && (
-          <div className="leading-snug">
-            {labelTotals.map(([label, ms], i) => (
-              <span key={label} className="whitespace-nowrap">
-                {formatMinutes(ms)} {label}
-                {i < labelTotals.length - 1 && ', '}
-              </span>
-            ))}
-          </div>
+        {labelTotals.length > 1 && totalMs > 0 && (
+          <>
+            {/* Share of time per activity */}
+            <div className="flex h-1.5 rounded-full overflow-hidden gap-px" aria-hidden>
+              {labelTotals.map(([label, ms], i) => (
+                <div
+                  key={label}
+                  className="transition-[flex-grow] duration-500"
+                  style={{ flexGrow: ms, backgroundColor: activityColor(label, i) }}
+                />
+              ))}
+            </div>
+            <div className="flex flex-wrap gap-x-2.5 gap-y-0.5 leading-snug">
+              {labelTotals.map(([label, ms], i) => (
+                <span key={label} className="flex items-center gap-1 min-w-0" title={`${label}: ${formatMinutes(ms)}`}>
+                  <span
+                    className="size-1.5 shrink-0 rounded-full"
+                    style={{ backgroundColor: activityColor(label, i) }}
+                  />
+                  <span className="truncate max-w-20">{label}</span>
+                  <span className="shrink-0 tabular-nums">{formatMinutes(ms)}</span>
+                </span>
+              ))}
+            </div>
+          </>
         )}
         <div className="text-gray-600 dark:text-gray-300 font-medium">{formatMinutes(totalMs)} total</div>
       </div>
@@ -307,7 +332,7 @@ const BlockRow = ({ block, accounting, now, canMerge, showControls, commit }: Bl
           aria-label={`Duration ${formatClock(ms)}, click to edit`}
           className={clsx(
             'w-14 shrink-0 text-right font-mono tabular-nums rounded px-1 cursor-text',
-            'hover:bg-gray-100/50 dark:hover:bg-white/5',
+            showControls && 'hover:bg-gray-100/50 dark:hover:bg-white/5',
             empty && 'text-gray-300 dark:text-gray-700',
           )}
         >
@@ -337,7 +362,7 @@ const BlockRow = ({ block, accounting, now, canMerge, showControls, commit }: Bl
           'bg-transparent border-none outline-none',
           'w-28 min-w-0 truncate rounded px-1',
           'placeholder-gray-300 dark:placeholder-gray-700',
-          'hover:bg-gray-100/50 dark:hover:bg-white/5',
+          showControls && 'hover:bg-gray-100/50 dark:hover:bg-white/5',
           'focus:bg-gray-100/70 dark:focus:bg-white/10',
           'transition-colors cursor-text',
         )}
