@@ -15,7 +15,7 @@ A minimal visual timer with a built-in time log.
 | Action               | Mouse / touch                 | Keyboard                |
 | -------------------- | ----------------------------- | ----------------------- |
 | Start / pause        | Click the clock               | Space / Enter           |
-| Set time             | Drag around the clock, scroll | Arrows (Shift = bigger) |
+| Set time             | Drag around the clock / scroll| Arrows (Shift = bigger) |
 | Show end time        | Hold the clock                |                         |
 | New log block        | `+ new` in the log            | N                       |
 | Undo log change      | `undo`                        | Ctrl+Z                  |
@@ -26,7 +26,7 @@ A minimal visual timer with a built-in time log.
 
 ```sh
 npm install
-npm run dev      # http://localhost:5273
-npm run png      # regenerate PNG icons from the SVGs (needs rsvg-convert)
-npm run build    # production build in dist/
+npm run dev
+npm run png    # regenerate PNG icons from the SVGs (needs rsvg-convert)
+npm run build
 ```
