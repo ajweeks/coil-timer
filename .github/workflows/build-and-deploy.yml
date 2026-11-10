@@ -42,6 +42,9 @@ jobs:
       - name: Check Prettier formatting
         run: npm run format:check
 
+      - name: Generate PNG icons
+        run: npm run png
+
       - name: Build
         run: npm run build
 

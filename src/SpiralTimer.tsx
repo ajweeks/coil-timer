@@ -39,6 +39,7 @@ import {
 import { Toolbar } from './Toolbar';
 import { ToolbarButton } from './ToolbarButton';
 import { useAnimation } from './useAnimation';
+import { useAttention } from './useAttention';
 import { useColorScheme } from './useColorScheme';
 import { useDeviceCapabilities } from './useDeviceCapabilities';
 import { useLocalStorage } from './useLocalStorage';
@@ -159,6 +160,8 @@ const SpiralTimer = () => {
   }, [isMuted]);
 
   useWakeLock({ enable: timerState.is === 'running' });
+  // Flash the taskbar etc. when the bell goes while the window is in the background
+  useAttention(timerState.is === 'postFinished');
 
   const timerInteractionRef = useRef<TimerInteraction | null>(null);
   const isOrWas = 'was' in timerState ? timerState.was : timerState.is;

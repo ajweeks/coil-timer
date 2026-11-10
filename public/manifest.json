@@ -1,8 +1,10 @@
 {
+  "id": "./",
   "name": "Coil",
   "short_name": "Coil",
   "description": "Distraction-free visual timer",
   "start_url": "./",
+  "scope": "./",
   "display": "standalone",
   "background_color": "#000000",
   "theme_color": "#000000",
@@ -30,6 +32,18 @@
       "sizes": "32x32",
       "type": "image/svg+xml",
       "purpose": "any"
+    },
+    {
+      "src": "icon-any-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "icon-maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
     }
   ],
   "categories": ["productivity", "utilities"],
