@@ -637,7 +637,9 @@ const SpiralTimer = () => {
               placeholder={windowFocused ? 'What are you working on?' : ''}
               maxLength={150}
               // Size to the text so the input doesn't cover (and swallow clicks on) the dial
-              style={{ width: `${(openBlock.label || (windowFocused ? 'What are you working on?' : '')).length + 2}ch` }}
+              style={{
+                width: `${(openBlock.label || (windowFocused ? 'What are you working on?' : '')).length + 2}ch`,
+              }}
               className={clsx(
                 'min-w-12 max-w-56 text-center bg-transparent',
                 'text-gray-700 dark:text-gray-300 placeholder-gray-400 dark:placeholder-gray-600',
