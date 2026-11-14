@@ -198,7 +198,8 @@ const SpiralTimer = () => {
     let endTime: number | null;
 
     if (timerState.is === 'interacting') {
-      remainingTime = timerInteractionRef.current!.remainingTime;
+      // The ref is empty if the drag began in another window (or before a reload)
+      remainingTime = timerInteractionRef.current?.remainingTime ?? timerState.remainingTime;
       endTime = remainingTime + Date.now();
     } else if (timerState.is === 'running') {
       endTime = timerState.endTime;
@@ -267,7 +268,12 @@ const SpiralTimer = () => {
   // ── JogDial handlers ──────────────────────────────────────────────────────
 
   const handleJogStart = () => {
-    if (timerState.is === 'interacting' || timerState.is === 'finished') return;
+    if (timerState.is === 'finished') return;
+    if (timerState.is === 'interacting') {
+      // Adopt a drag left over from another window or a reload so the dial isn't stuck
+      timerInteractionRef.current ??= { remainingTime: timerState.remainingTime, hasChanged: false };
+      return;
+    }
     // Dragging in postFinished acts as an implicit "continue" — dismiss the
     // completion screen and start adjusting time immediately.
     if (timerState.is === 'postFinished') {
@@ -439,11 +445,14 @@ const SpiralTimer = () => {
       e.preventDefault();
       if (timerState.is !== 'running' && timerState.is !== 'paused') return;
       const delta = e.deltaY;
+      if (delta === 0) return; // horizontal scroll
+      // Hours mode rounds to whole minutes, so steps must be at least a minute or
+      // a 30s step down from an exact minute rounds straight back up
       const change =
         timerState.mode === 'hours'
           ? e.shiftKey
             ? 5 * Minutes
-            : 30 * Seconds
+            : 1 * Minutes
           : e.shiftKey
             ? 30 * Seconds
             : 5 * Seconds;
@@ -627,8 +636,10 @@ const SpiralTimer = () => {
               aria-label="Label for the current block"
               placeholder={windowFocused ? 'What are you working on?' : ''}
               maxLength={150}
+              // Size to the text so the input doesn't cover (and swallow clicks on) the dial
+              style={{ width: `${(openBlock.label || (windowFocused ? 'What are you working on?' : '')).length + 2}ch` }}
               className={clsx(
-                'w-56 text-center bg-transparent',
+                'min-w-12 max-w-56 text-center bg-transparent',
                 'text-gray-700 dark:text-gray-300 placeholder-gray-400 dark:placeholder-gray-600',
                 'text-sm font-medium',
                 'border-b border-transparent',

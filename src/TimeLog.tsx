@@ -289,6 +289,7 @@ const BlockRow = ({ block, accounting, now, canMerge, showControls, commit }: Bl
   // Scroll over a duration to nudge it by a minute (5 with shift)
   useNonPassiveWheelHandler(durationEl, (e: WheelEvent) => {
     e.preventDefault();
+    if (e.deltaY === 0) return;
     const step = (e.shiftKey ? 5 : 1) * Minutes;
     commit(setDuration(accounting, block.id, ms + (e.deltaY > 0 ? -step : step), Date.now()), `nudge:${block.id}`);
   });
