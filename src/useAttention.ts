@@ -1,4 +1,5 @@
 import { useEffect } from 'react';
+import { isNative, requestAttention } from './native';
 
 const ALERT_TITLE = '⏰ Time’s up';
 const BLINK_INTERVAL_MS = 1000;
@@ -12,6 +13,7 @@ const BLINK_INTERVAL_MS = 1000;
  *   ignore the call entirely, in which case nothing happens.)
  * - Blinks the document title, which shows on the taskbar button / tab.
  * - Sets an app badge on the taskbar icon when running as an installed PWA.
+ * - In the desktop app, asks the OS directly to flash the taskbar button.
  *
  * Everything is undone as soon as the window regains focus.
  */
@@ -28,7 +30,8 @@ export const useAttention = (active: boolean) => {
     }, BLINK_INTERVAL_MS);
 
     navigator.setAppBadge?.().catch(() => {});
-    window.focus();
+    if (isNative) requestAttention().catch(() => {});
+    else window.focus();
 
     const stop = () => {
       clearInterval(blink);

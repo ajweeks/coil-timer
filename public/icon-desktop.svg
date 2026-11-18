@@ -1,0 +1,7 @@
+<svg width="512" height="512" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg">
+  <!-- Desktop app icon (src-tauri/icons): the coil on a rounded tile, bold enough to read at 16px -->
+  <rect x="16" y="16" width="480" height="480" rx="108" fill="#0a0a0a" />
+  <circle cx="256" cy="256" r="150" fill="none" stroke="#8B0008" stroke-width="34" />
+  <path d="M 256 106 A 150 150 0 0 1 406 256" fill="none" stroke="#0a0a0a" stroke-width="84" stroke-linecap="round" />
+  <path d="M 256 106 A 150 150 0 0 1 406 256" fill="none" stroke="#e7000b" stroke-width="64" stroke-linecap="round" />
+</svg>

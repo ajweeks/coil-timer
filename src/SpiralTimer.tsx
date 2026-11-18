@@ -5,17 +5,26 @@ import {
   Ghost,
   HelpCircle,
   PictureInPicture2,
+  Pin,
   Scan,
-  Share2,
   TimerReset,
   Volume2,
   VolumeX,
+  X,
 } from 'lucide-react';
 import { KeyboardEvent, useCallback, useEffect, useRef, useState } from 'react';
 import { AnimatedColon } from './AnimatedColon';
 import { ClockFace, ClockFaceHandle } from './ClockFace';
 import { HelpScreen } from './HelpScreen';
 import { JogDial, JogEvent } from './JogDial';
+import {
+  closeWindow,
+  isNative,
+  onWindowFocusChanged,
+  setAlwaysOnTop,
+  startDragging,
+  toggleNativeFullscreen,
+} from './native';
 import { MenuItem, SettingsMenu } from './SettingsMenu';
 import { initAudioContext, playRingSound } from './sound-utils';
 import {
@@ -151,21 +160,31 @@ const SpiralTimer = () => {
     };
     window.addEventListener('focus', onFocus);
     window.addEventListener('blur', onBlur);
+    // In the desktop app, also follow the native window (see onWindowFocusChanged)
+    const unlisten = isNative
+      ? onWindowFocusChanged((focused) => (focused ? onFocus() : onBlur())).catch(() => null)
+      : null;
     return () => {
       clearTimeout(blurTimer);
       window.removeEventListener('focus', onFocus);
       window.removeEventListener('blur', onBlur);
+      unlisten?.then((fn) => fn?.());
     };
   }, []);
   const [isMuted, setIsMuted] = useStoredFlag('coil-timer-muted');
   const [isSeeThroughEnabled, setIsSeeThroughEnabled] = useStoredFlag('coil-timer-see-through');
-  // When unfocused, drop the background so only the coil, label and time remain
-  const isSeeThrough = isSeeThroughEnabled && !windowFocused && !isHelpVisible;
+  // When unfocused, drop the background so only the coil, label and time remain. Only the desktop app
+  // has a transparent window; in a browser there'd be nothing to see through to.
+  const isSeeThrough = isNative && isSeeThroughEnabled && !windowFocused && !isHelpVisible;
+  const [isAlwaysOnTop, setIsAlwaysOnTop] = useStoredFlag('coil-timer-always-on-top');
+  useEffect(() => {
+    if (isNative) setAlwaysOnTop(isAlwaysOnTop).catch(() => {});
+  }, [isAlwaysOnTop]);
   useEffect(() => {
     document.documentElement.classList.toggle('see-through', isSeeThrough);
   }, [isSeeThrough]);
-  // The time log is hidden when see-through, so centre the clock rather than making room for it
-  const clockTop = isSeeThrough ? 0 : clockOffsetForLog(viewport, timeLogSize);
+  const clockTop = clockOffsetForLog(viewport, timeLogSize);
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
 
   useWakeLock({ enable: timerState.is === 'running' });
   // Flash the taskbar etc. when the bell goes while the window is in the background
@@ -416,6 +435,10 @@ const SpiralTimer = () => {
   });
 
   const toggleFullscreen = () => {
+    if (isNative) {
+      toggleNativeFullscreen().catch(() => {});
+      return;
+    }
     // requestFullscreen is missing on iOS Safari and rejects if not permitted
     if (document.fullscreenElement) {
       document.exitFullscreen?.().catch(() => {});
@@ -426,7 +449,7 @@ const SpiralTimer = () => {
 
   // Browsers won't shrink a regular tab window below ~500px wide, but popup windows can go
   // much smaller. Timer state syncs between windows via localStorage `storage` events.
-  const canPopOut = !isMobile && !isPopoutWindow();
+  const canPopOut = !isNative && !isMobile && !isPopoutWindow();
   const openPopout = () => {
     const size = 320;
     const left = Math.max(0, window.screenX + window.outerWidth - size - 40);
@@ -437,6 +460,26 @@ const SpiralTimer = () => {
       `popup,width=${size},height=${size},left=${left},top=${top}`,
     );
     popup?.focus();
+  };
+
+  // The desktop app has no title bar: drag the background to move the window. Dragging only starts
+  // once the pointer moves, so clicks and double-clicks on the background still work.
+  const dragStartRef = useRef<{ x: number; y: number } | null>(null);
+  const handleBackgroundPointerDown = (e: React.PointerEvent) => {
+    if (!isNative || e.button !== 0) return;
+    const target = e.target as Element;
+    if (target.closest('button, a, input, [data-time-log], [role="menu"]')) return;
+    dragStartRef.current = { x: e.clientX, y: e.clientY };
+  };
+  const handleBackgroundPointerMove = (e: React.PointerEvent) => {
+    const start = dragStartRef.current;
+    if (!start || !(e.buttons & 1)) {
+      dragStartRef.current = null;
+      return;
+    }
+    if (Math.hypot(e.clientX - start.x, e.clientY - start.y) < 4) return;
+    dragStartRef.current = null;
+    startDragging().catch(() => {});
   };
 
   const toggleTimerMode = () => {
@@ -470,25 +513,12 @@ const SpiralTimer = () => {
   );
   useNonPassiveWheelHandler(container, handleWheel);
 
-  const handleShare = navigator.share
-    ? () => {
-        navigator
-          .share({
-            title: document.title,
-            text: 'Distraction-free visual timer',
-            url: window.location.href,
-          })
-          .catch(() => {
-            /* user cancelled */
-          });
-      }
-    : null;
-
   // ── Derived state ─────────────────────────────────────────────────────────
 
   const controlsAreVisible = timerState.is === 'paused' || mustShowControls || timerState.is === 'postFinished';
   // When the window isn't focused, show only the clock and the time log
-  const showButtons = controlsAreVisible && !isHelpVisible && windowFocused;
+  // An open settings menu stays up until it's dismissed, even while the timer runs
+  const showButtons = (controlsAreVisible || isSettingsOpen) && !isHelpVisible && windowFocused;
   const hint = timerState.is === 'interacting' ? 'end-time' : wasModeRecentlyChanged ? 'precision' : null;
 
   const blocks = withOpenBlock(timerModel.blocks);
@@ -511,10 +541,19 @@ const SpiralTimer = () => {
       )}
       style={{ '--clock-diameter': `${(clockRadius ?? 100) * 2}px` } as React.CSSProperties}
       onClick={handleBackgroundClicks}
+      onPointerDown={handleBackgroundPointerDown}
+      onPointerMove={handleBackgroundPointerMove}
+      onPointerUp={() => (dragStartRef.current = null)}
     >
       {/* Clock face */}
       <div
-        className={clsx('absolute left-0 w-[100vw]', 'breathe-animation', 'transition-opacity')}
+        className={clsx(
+          'absolute left-0 w-[100vw]',
+          'breathe-animation',
+          'transition-opacity',
+          // Outline the coil and text so they read against whatever is behind the window
+          isSeeThrough && 'see-through-outline',
+        )}
         style={{ top: clockTop, height: `calc(100vh - ${clockTop}px)` }}
       >
         {scheme.effective && (
@@ -626,7 +665,7 @@ const SpiralTimer = () => {
         </JogDial>
 
         {/* ── Session name input ── shown when paused or after completion */}
-        {showNameInput && (
+        {showNameInput && !isSeeThrough && (
           <div
             className="absolute top-[calc(50%-min(10rem,var(--clock-diameter)*0.3))] left-1/2 -translate-x-1/2 flex flex-col items-center gap-1 z-10"
             onClick={(e) => e.stopPropagation()}
@@ -692,6 +731,11 @@ const SpiralTimer = () => {
 
       {/* ── Top-left toolbar (mode + restore) ── */}
       <Toolbar ariaLabel="Timer controls" isVisible={showButtons}>
+        {isNative && (
+          <ToolbarButton onClick={() => closeWindow().catch(() => {})} aria-label="Close" title="Close">
+            <X size={24} />
+          </ToolbarButton>
+        )}
         <ToolbarButton
           onClick={toggleTimerMode}
           aria-label={`Switch to ${timerState.mode === 'hours' ? 'minutes' : 'hours'} mode`}
@@ -714,7 +758,15 @@ const SpiralTimer = () => {
       </Toolbar>
 
       {/* ── Bottom-left: settings menu ── */}
-      <SettingsMenu isVisible={showButtons}>
+      <SettingsMenu
+        isVisible={showButtons}
+        isOpen={isSettingsOpen}
+        onOpenChange={(open) => {
+          setIsSettingsOpen(open);
+          // Leave the controls up for a moment after closing, rather than vanishing with the menu
+          if (!open) setMustShowControls(true);
+        }}
+      >
         <MenuItem
           icon={isMuted ? <VolumeX /> : <Volume2 />}
           label="Sound"
@@ -724,13 +776,23 @@ const SpiralTimer = () => {
             setIsMuted(!isMuted);
           }}
         />
-        <MenuItem
-          icon={<Ghost />}
-          label="See-through when unfocused"
-          hint="When the window loses focus, hide everything but the coil, label and time"
-          checked={isSeeThroughEnabled}
-          onClick={() => setIsSeeThroughEnabled(!isSeeThroughEnabled)}
-        />
+        {isNative && (
+          <MenuItem
+            icon={<Pin />}
+            label="Always on top"
+            checked={isAlwaysOnTop}
+            onClick={() => setIsAlwaysOnTop(!isAlwaysOnTop)}
+          />
+        )}
+        {isNative && (
+          <MenuItem
+            icon={<Ghost />}
+            label="See-through when unfocused"
+            hint="When the window loses focus, hide everything but the coil, label and time"
+            checked={isSeeThroughEnabled}
+            onClick={() => setIsSeeThroughEnabled(!isSeeThroughEnabled)}
+          />
+        )}
         {canPopOut && (
           <MenuItem
             icon={<PictureInPicture2 />}
@@ -739,7 +801,6 @@ const SpiralTimer = () => {
             onClick={openPopout}
           />
         )}
-        {handleShare && <MenuItem icon={<Share2 />} label="Share" onClick={handleShare} />}
         <MenuItem icon={<HelpCircle />} label="Help" onClick={() => setIsHelpVisible(true)} />
       </SettingsMenu>
 

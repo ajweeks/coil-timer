@@ -30,3 +30,20 @@ npm run dev
 npm run png    # regenerate PNG icons from the SVGs (needs rsvg-convert)
 npm run build
 ```
+
+### Desktop app (Windows / Linux)
+
+The same code also builds as a [Tauri](https://tauri.app) desktop app, with a frameless, optionally
+see-through and always-on-top window. Needs [Rust](https://rustup.rs) and the
+[Tauri prerequisites](https://tauri.app/start/prerequisites/) for your OS.
+
+```sh
+npm run desktop        # run the desktop app with hot reload
+npm run build:desktop  # installers → src-tauri/target/release/bundle/
+npm run build:all      # web (dist/) and desktop
+npm run icons:desktop  # regenerate the app icons from public/icon-desktop.svg
+```
+
+CI builds both on every push and PR (desktop installers are attached to the run as artifacts), and
+deploys the web app from `main`. `npm run release` bumps the patch version and pushes a tag, which
+publishes a draft GitHub release with the installers.

@@ -1,5 +1,6 @@
 node_modules/
 dist/
+dist-desktop/
 .DS_Store
 *.log
 .env
@@ -9,3 +10,5 @@ dist/
 .env.production.local
 public/apple-touch-icon.png
 public/social-preview.png
+src-tauri/target/
+src-tauri/gen/

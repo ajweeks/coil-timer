@@ -1,0 +1,19 @@
+[package]
+name = "coil"
+version = "1.0.0"
+description = "Distraction-free visual timer"
+license = "ISC"
+repository = "https://github.com/z0u/coil-timer"
+edition = "2024"
+rust-version = "1.90"
+
+[lib]
+name = "coil_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2.7.5", features = [] }
+
+[dependencies]
+tauri = { version = "2.12.6", features = [] }
+tauri-plugin-window-state = "2"

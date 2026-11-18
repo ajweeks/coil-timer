@@ -979,3 +979,16 @@ html.see-through,
 html.see-through body {
   background-color: transparent;
 }
+
+/* A halo around the coil and text in see-through mode, so they stay legible over any background */
+.see-through-outline {
+  --halo: rgb(255 255 255 / 0.9);
+  filter: drop-shadow(0 0 1px var(--halo)) drop-shadow(0 0 1px var(--halo)) drop-shadow(0 0 3px var(--halo));
+}
+.dark .see-through-outline {
+  --halo: rgb(0 0 0 / 0.9);
+}
+/* The label input's underline is noise when see-through */
+.see-through-outline input {
+  border-color: transparent !important;
+}

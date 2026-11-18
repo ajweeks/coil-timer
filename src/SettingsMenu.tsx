@@ -1,27 +1,32 @@
 import clsx from 'clsx';
 import { Settings } from 'lucide-react';
-import { ReactNode, useEffect, useRef, useState } from 'react';
+import { ReactNode, useEffect, useRef } from 'react';
 
 interface SettingsMenuProps {
   isVisible: boolean;
+  isOpen: boolean;
+  onOpenChange: (isOpen: boolean) => void;
   children: ReactNode;
 }
 
 /** A cog button (bottom-left) that opens a small menu of settings and actions above it. */
-export const SettingsMenu = ({ isVisible, children }: SettingsMenuProps) => {
-  const [isOpenState, setIsOpen] = useState(false);
-  const isOpen = isOpenState && isVisible;
+export const SettingsMenu = ({ isVisible, isOpen: isOpenProp, onOpenChange, children }: SettingsMenuProps) => {
+  const isOpen = isOpenProp && isVisible;
+  const setIsOpenRef = useRef(onOpenChange);
+  useEffect(() => {
+    setIsOpenRef.current = onOpenChange;
+  });
   const rootRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
     if (!isOpen) return;
     const handlePointerDown = (e: PointerEvent) => {
-      if (!rootRef.current?.contains(e.target as Node)) setIsOpen(false);
+      if (!rootRef.current?.contains(e.target as Node)) setIsOpenRef.current(false);
     };
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key !== 'Escape') return;
-      setIsOpen(false);
+      setIsOpenRef.current(false);
       triggerRef.current?.focus();
     };
     document.addEventListener('pointerdown', handlePointerDown, { capture: true });
@@ -36,21 +41,23 @@ export const SettingsMenu = ({ isVisible, children }: SettingsMenuProps) => {
     <div
       ref={rootRef}
       className={clsx(
-        'absolute bottom-6 left-6 z-30',
+        'absolute bottom-6 left-6 max-[240px]:bottom-3 max-[240px]:left-3 z-30',
         'transition-all duration-500',
         isVisible ? 'visible' : 'opacity-0 invisible',
       )}
       onClick={(e) => {
         e.stopPropagation();
         // Actions close the menu; toggles leave it open so the change is visible
-        if ((e.target as Element).closest('[data-closes-menu]')) setIsOpen(false);
+        if ((e.target as Element).closest('[data-closes-menu]')) onOpenChange(false);
       }}
     >
       <div
         role="menu"
         aria-label="Settings"
         className={clsx(
-          'absolute bottom-full left-0 mb-3 w-max min-w-48 py-1',
+          // Fit tiny windows: never wider or taller than the space beside/above the cog, and scroll if needed
+          'absolute bottom-full left-0 mb-2 w-max max-w-[calc(100vw-2rem)] max-h-[calc(100vh-4rem)] overflow-y-auto py-1',
+          'max-[240px]:max-w-[calc(100vw-1.5rem)] max-[240px]:max-h-[calc(100vh-3rem)] max-[240px]:text-xs',
           'rounded-lg border border-gray-200 dark:border-gray-800',
           'bg-white/95 dark:bg-gray-950/95 backdrop-blur-sm shadow-lg',
           'text-sm text-gray-700 dark:text-gray-300',
@@ -73,7 +80,7 @@ export const SettingsMenu = ({ isVisible, children }: SettingsMenuProps) => {
           'transition-[opacity,transform] duration-200 active:scale-95',
           isOpen ? 'opacity-100 rotate-45' : 'opacity-50 hover:opacity-100',
         )}
-        onClick={() => setIsOpen((open) => !open)}
+        onClick={() => onOpenChange(!isOpen)}
       >
         <Settings size={24} />
       </button>
@@ -97,17 +104,18 @@ export const MenuItem = ({ icon, label, onClick, checked, hint }: MenuItemProps)
       type="button"
       role={isToggle ? 'menuitemcheckbox' : 'menuitem'}
       aria-checked={isToggle ? checked : undefined}
-      title={hint}
+      title={hint ?? label}
       data-closes-menu={isToggle ? undefined : true}
       className={clsx(
-        'w-full flex items-center gap-3 px-3 py-2 text-left whitespace-nowrap cursor-pointer',
+        'w-full flex items-center gap-2 px-2.5 py-1.5 text-left cursor-pointer',
         'hover:bg-gray-100 dark:hover:bg-gray-900 focus-visible:bg-gray-100 dark:focus-visible:bg-gray-900',
         'focus:outline-none',
       )}
       onClick={onClick}
     >
-      <span className="shrink-0 text-gray-500 dark:text-gray-400 [&>svg]:size-[18px]">{icon}</span>
-      <span className="grow">{label}</span>
+      {/* Icons give way to the labels in very narrow windows */}
+      <span className="shrink-0 text-gray-500 dark:text-gray-400 [&>svg]:size-[18px] max-[240px]:hidden">{icon}</span>
+      <span className="grow min-w-0 break-words leading-tight">{label}</span>
       {isToggle && (
         <span
           aria-hidden

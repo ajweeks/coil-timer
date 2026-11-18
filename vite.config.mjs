@@ -5,6 +5,7 @@ import { defineConfig } from 'vite';
 
 export default defineConfig({
   plugins: [react(), tailwindcss()],
+  // The desktop build overrides this with `--base ./` (see the build:desktop-frontend script)
   base: process.env.NODE_ENV === 'production' ? '/coil-timer/' : '/',
   server: {
     host: '0.0.0.0',

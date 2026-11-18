@@ -1,6 +1,7 @@
 import clsx from 'clsx';
 import { GitMerge, RefreshCcw, X } from 'lucide-react';
 import { useEffect, useState } from 'react';
+import { isNative } from './native';
 import { useDeviceCapabilities } from './useDeviceCapabilities';
 import { useTemporaryState } from './useTemporaryState';
 import { Second } from './time-utils';
@@ -112,6 +113,11 @@ export const HelpScreen = ({ isHelpVisible, bgAction, jogDialAction, onCloseClic
               <li>
                 <strong>{device.isTouchDevice ? 'Tap-tap' : 'Double-click'}:</strong> enter fullscreen
               </li>
+              {isNative && (
+                <li>
+                  <strong>Drag:</strong> move window
+                </li>
+              )}
               {!device.isMobile && (
                 <li>
                   <strong>Scroll:</strong> set time
