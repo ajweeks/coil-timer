@@ -55,7 +55,8 @@ interface UndoEntry {
 export type Commit = (next: TimeAccounting, kind: string, toast?: string) => void;
 
 /** Undo history for time log edits, with Ctrl/Cmd+Z. Starting/stopping the timer isn't undoable; edits are. */
-export const useTimeLogUndo = (accounting: TimeAccounting, onChange: (next: TimeAccounting) => void) => {
+/** `kind` is the kind of edit that was committed ('split', 'clear', 'label:…', etc.); absent for undo. */
+export const useTimeLogUndo = (accounting: TimeAccounting, onChange: (next: TimeAccounting, kind?: string) => void) => {
   const [stack, setStack] = useState<UndoEntry[]>([]);
   const [toast, setToast] = useState<string | null>(null);
 
@@ -74,7 +75,7 @@ export const useTimeLogUndo = (accounting: TimeAccounting, onChange: (next: Time
     const entry = { point: coalesce ? { ...point, before: top.point.before } : point, kind, at: now };
     setStack([...(coalesce ? stack.slice(0, -1) : stack), entry].slice(-MAX_UNDO));
     setToast(toastMessage ?? null);
-    onChange(next);
+    onChange(next, kind);
   };
 
   const undo = () => {

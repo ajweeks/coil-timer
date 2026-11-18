@@ -973,3 +973,9 @@ console.log(keyframes);
     opacity: 0.3;
   }
 }
+
+/* See-through mode: let the desktop show through (needs a transparent native window to be visible) */
+html.see-through,
+html.see-through body {
+  background-color: transparent;
+}

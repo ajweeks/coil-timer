@@ -1,11 +1,22 @@
 import * as math from '@thi.ng/math';
 import clsx from 'clsx';
-import { ClockFading, HelpCircle, PictureInPicture2, Scan, Share2, TimerReset, Volume2, VolumeX } from 'lucide-react';
+import {
+  ClockFading,
+  Ghost,
+  HelpCircle,
+  PictureInPicture2,
+  Scan,
+  Share2,
+  TimerReset,
+  Volume2,
+  VolumeX,
+} from 'lucide-react';
 import { KeyboardEvent, useCallback, useEffect, useRef, useState } from 'react';
 import { AnimatedColon } from './AnimatedColon';
 import { ClockFace, ClockFaceHandle } from './ClockFace';
 import { HelpScreen } from './HelpScreen';
 import { JogDial, JogEvent } from './JogDial';
+import { MenuItem, SettingsMenu } from './SettingsMenu';
 import { initAudioContext, playRingSound } from './sound-utils';
 import {
   formatDuration,
@@ -67,9 +78,12 @@ const MINUTES_MODE_FPS = {
   running: 6, // mimic high-resolution stopwatches
 };
 
+// Hours mode starts each new task at this, until the user sets a different duration
+const DEFAULT_TASK_DURATION = 45 * Minutes;
+
 const DEFAULT_RESTORE_POINT: TimerRestorePoint = Object.freeze({
   minutes: Object.freeze({ duration: 5 * Seconds }),
-  hours: Object.freeze({ duration: 10 * Minutes }),
+  hours: Object.freeze({ duration: DEFAULT_TASK_DURATION }),
 });
 const DEFAULT_STATE: TimerState = Object.freeze({
   is: 'paused',
@@ -91,7 +105,9 @@ const SpiralTimer = () => {
     (next: TimerModel) => saveTimerModel(accountTime(timerModel, next, Date.now())),
     [timerModel, saveTimerModel],
   );
-  const timeLog = useTimeLogUndo(timerModel, (next) => setTimerModel({ ...timerModel, ...next }));
+  const timeLog = useTimeLogUndo(timerModel, (next, kind) =>
+    setTimerModel(withNewTaskDuration({ ...timerModel, ...next }, kind)),
+  );
   const timerState = timerModel.state;
   const restorePoint = timerModel.restorePoint;
   const scheme = useColorScheme();
@@ -121,7 +137,6 @@ const SpiralTimer = () => {
   const [timeLogEl, setTimeLogEl] = useState<HTMLDivElement | null>(null);
   const timeLogSize = useElementSize(timeLogEl);
   const viewport = useViewportSize();
-  const clockTop = clockOffsetForLog(viewport, timeLogSize);
 
   // Track window focus — used to hide decorative UI after a delay when window loses focus
   const [windowFocused, setWindowFocused] = useState(true);
@@ -142,22 +157,15 @@ const SpiralTimer = () => {
       window.removeEventListener('blur', onBlur);
     };
   }, []);
-  const [isMuted, setIsMuted] = useState(() => {
-    try {
-      return localStorage.getItem('coil-timer-muted') === 'true';
-    } catch {
-      return false;
-    }
-  });
-
-  // Persist mute state to localStorage
+  const [isMuted, setIsMuted] = useStoredFlag('coil-timer-muted');
+  const [isSeeThroughEnabled, setIsSeeThroughEnabled] = useStoredFlag('coil-timer-see-through');
+  // When unfocused, drop the background so only the coil, label and time remain
+  const isSeeThrough = isSeeThroughEnabled && !windowFocused && !isHelpVisible;
   useEffect(() => {
-    try {
-      localStorage.setItem('coil-timer-muted', isMuted.toString());
-    } catch {
-      // Silently fail if localStorage is not available
-    }
-  }, [isMuted]);
+    document.documentElement.classList.toggle('see-through', isSeeThrough);
+  }, [isSeeThrough]);
+  // The time log is hidden when see-through, so centre the clock rather than making room for it
+  const clockTop = isSeeThrough ? 0 : clockOffsetForLog(viewport, timeLogSize);
 
   useWakeLock({ enable: timerState.is === 'running' });
   // Flash the taskbar etc. when the bell goes while the window is in the background
@@ -496,7 +504,11 @@ const SpiralTimer = () => {
   return (
     <div
       ref={setContainer}
-      className={clsx('h-screen overflow-hidden relative', 'text-white', 'bg-white dark:bg-black')}
+      className={clsx(
+        'h-screen overflow-hidden relative',
+        'text-white',
+        isSeeThrough ? 'bg-transparent' : 'bg-white dark:bg-black',
+      )}
       style={{ '--clock-diameter': `${(clockRadius ?? 100) * 2}px` } as React.CSSProperties}
       onClick={handleBackgroundClicks}
     >
@@ -513,8 +525,9 @@ const SpiralTimer = () => {
               'decoration-gray-700 dark:decoration-white',
               'text-gray-600 dark:text-gray-200',
               'fill-red-100 dark:fill-red-900',
-              'bg-white dark:bg-black',
+              isSeeThrough ? 'bg-transparent' : 'bg-white dark:bg-black',
             )}
+            seeThrough={isSeeThrough}
             colorScheme={scheme.effective}
             initialTime={timerState.is === 'paused' ? timerState.remainingTime : 0}
             onClockRadiusChange={setClockRadius}
@@ -689,8 +702,8 @@ const SpiralTimer = () => {
         </ToolbarButton>
       </Toolbar>
 
-      {/* ── Bottom-right: visual/audio controls ── */}
-      <Toolbar ariaLabel="Visual controls" isVisible={showButtons} position="bottom-right">
+      {/* ── Bottom-right: fullscreen ── */}
+      <Toolbar ariaLabel="View controls" isVisible={showButtons} position="bottom-right">
         <ToolbarButton
           aria-label={document.fullscreenElement ? 'Exit fullscreen' : 'Enter fullscreen'}
           title="Fullscreen"
@@ -698,54 +711,48 @@ const SpiralTimer = () => {
         >
           <Scan size={24} />
         </ToolbarButton>
+      </Toolbar>
 
-        {canPopOut && (
-          <ToolbarButton aria-label="Open in a small resizable window" title="Pop out" onClick={openPopout}>
-            <PictureInPicture2 size={24} />
-          </ToolbarButton>
-        )}
-
-        <ToolbarButton
+      {/* ── Bottom-left: settings menu ── */}
+      <SettingsMenu isVisible={showButtons}>
+        <MenuItem
+          icon={isMuted ? <VolumeX /> : <Volume2 />}
+          label="Sound"
+          checked={!isMuted}
           onClick={() => {
             initAudioContext();
             setIsMuted(!isMuted);
           }}
-          aria-label={isMuted ? 'Unmute' : 'Mute'}
-          title={isMuted ? 'Unmute' : 'Mute'}
-          className="relative"
-        >
-          <Volume2
-            size={24}
-            className={clsx('transition-opacity duration-200', !isMuted ? 'opacity-100' : 'opacity-0')}
+        />
+        <MenuItem
+          icon={<Ghost />}
+          label="See-through when unfocused"
+          hint="When the window loses focus, hide everything but the coil, label and time"
+          checked={isSeeThroughEnabled}
+          onClick={() => setIsSeeThroughEnabled(!isSeeThroughEnabled)}
+        />
+        {canPopOut && (
+          <MenuItem
+            icon={<PictureInPicture2 />}
+            label="Pop out"
+            hint="Open in a small resizable window"
+            onClick={openPopout}
           />
-          <VolumeX
-            className={clsx('absolute inset-0 transition-opacity duration-200', isMuted ? 'opacity-100' : 'opacity-0')}
-          />
-        </ToolbarButton>
-      </Toolbar>
-
-      {/* ── Bottom-left: help & share ── */}
-      <Toolbar ariaLabel="Help etc." isVisible={showButtons} position="bottom-left">
-        <ToolbarButton
-          onClick={() => setIsHelpVisible(true)}
-          aria-label={isHelpVisible ? 'Hide instructions' : 'Show instructions'}
-          title="Help"
-        >
-          <HelpCircle size={24} />
-        </ToolbarButton>
-
-        {handleShare && (
-          <ToolbarButton onClick={handleShare} aria-label="Share this app" title="Share">
-            <Share2 size={24} />
-          </ToolbarButton>
         )}
-      </Toolbar>
+        {handleShare && <MenuItem icon={<Share2 />} label="Share" onClick={handleShare} />}
+        <MenuItem icon={<HelpCircle />} label="Help" onClick={() => setIsHelpVisible(true)} />
+      </SettingsMenu>
 
       {/* ── Time log — top-left ── */}
       {/* Always mounted (it hides itself when empty) so undo and the N shortcut survive */}
       <TimeLog
         ref={setTimeLogEl}
-        className={clsx('absolute top-4 left-4 z-20', isHelpVisible && 'hidden')}
+        className={clsx(
+          'absolute top-4 left-4 z-20 transition-opacity duration-500',
+          isHelpVisible && 'hidden',
+          // Keep its layout (the clock is positioned around it) but hide it in see-through mode
+          isSeeThrough && 'opacity-0 invisible',
+        )}
         showControls={windowFocused}
         accounting={timerModel}
         commit={timeLog.commit}
@@ -763,6 +770,37 @@ const POPOUT_WINDOW_NAME = 'coil-timer-popout';
 const isPopoutWindow = () => window.name === POPOUT_WINDOW_NAME;
 
 const zerosAsOs = (text: string) => text.replaceAll('0', 'O');
+
+/**
+ * New tasks start at the last duration the user set (45 min if they haven't), and clearing the log
+ * forgets that duration. Only applies while paused: a running timer is left alone.
+ */
+const withNewTaskDuration = (model: TimerModel, kind: string | undefined): TimerModel => {
+  if (kind !== 'split' && kind !== 'clear') return model;
+  const restorePoint = kind === 'clear' ? DEFAULT_RESTORE_POINT : model.restorePoint;
+  const state = model.state;
+  if (state.is !== 'paused') return { ...model, restorePoint };
+  return { ...model, restorePoint, state: { ...state, remainingTime: restorePoint[state.mode].duration } };
+};
+
+/** A boolean preference persisted to localStorage. */
+const useStoredFlag = (key: string) => {
+  const [value, setValue] = useState(() => {
+    try {
+      return localStorage.getItem(key) === 'true';
+    } catch {
+      return false;
+    }
+  });
+  useEffect(() => {
+    try {
+      localStorage.setItem(key, value.toString());
+    } catch {
+      // Silently fail if localStorage is not available
+    }
+  }, [key, value]);
+  return [value, setValue] as const;
+};
 
 /**
  * Friendly total duration regardless of mode — shows all non-zero units.

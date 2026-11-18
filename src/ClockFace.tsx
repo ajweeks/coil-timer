@@ -1,7 +1,7 @@
 import * as math from '@thi.ng/math';
 import * as v from '@thi.ng/vectors';
 import clsx from 'clsx';
-import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from 'react';
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
 import { Hours, Minutes, Second } from './time-utils';
 import { TimerMode } from './TimerState';
 
@@ -37,6 +37,8 @@ type ClockFaceProps = {
   initialTime: number;
   mode: TimerMode;
   isRunning: boolean;
+  /** Draw only the coil: no background or ticks, so whatever is behind the canvas shows through */
+  seeThrough?: boolean;
 };
 
 type Dimensions = {
@@ -51,11 +53,12 @@ function ease(t: number, clamp = true): number {
 }
 
 export const ClockFace = forwardRef<ClockFaceHandle, ClockFaceProps>(
-  ({ className, colorScheme, onClockRadiusChange, initialTime, mode, isRunning }, ref) => {
+  ({ className, colorScheme, onClockRadiusChange, initialTime, mode, isRunning, seeThrough = false }, ref) => {
     const [canvas, setCanvas] = useState<HTMLCanvasElement | null>(null);
     const [dimensions, setDimensions] = useState<Dimensions | null>(null);
     const victoryAnimation = useRef<number>(0);
-    const theme = useCanvasTheme(canvas, colorScheme);
+    const canvasTheme = useCanvasTheme(canvas, colorScheme);
+    const theme = useMemo(() => canvasTheme && { ...canvasTheme, seeThrough }, [canvasTheme, seeThrough]);
 
     const drawClockFace = useCallback(
       (timeToDraw: number) => {
@@ -79,8 +82,12 @@ export const ClockFace = forwardRef<ClockFaceHandle, ClockFaceProps>(
         ctx.resetTransform();
         ctx.scale(dpr, dpr);
 
-        ctx.fillStyle = theme.bg;
-        ctx.fillRect(0, 0, width, height);
+        if (theme.seeThrough) {
+          ctx.clearRect(0, 0, width, height);
+        } else {
+          ctx.fillStyle = theme.bg;
+          ctx.fillRect(0, 0, width, height);
+        }
 
         const trackLength = mode === 'hours' ? Hours : Minutes;
         const tracks = getTracks(timeToDraw, CLOCK_DIAMETER, TRACK_SPACING, trackLength);
@@ -111,7 +118,7 @@ export const ClockFace = forwardRef<ClockFaceHandle, ClockFaceProps>(
           // else primaryTickStyle = 'pause';
           else primaryTickStyle = 'triangle';
 
-          drawClockTicks({ ctx, finalTrack, theme, mode, primaryTickStyle });
+          if (!theme.seeThrough) drawClockTicks({ ctx, finalTrack, theme, mode, primaryTickStyle });
         } finally {
           ctx.restore();
         }
@@ -332,7 +339,7 @@ const drawTrackMarker = (
 
       if (phase === 'backdrop-1') {
         // Mask
-        ctx.strokeStyle = theme.bg;
+        ctx.strokeStyle = maskColor(ctx, theme);
         ctx.lineWidth = w * 2;
         ctx.stroke();
       }
@@ -347,8 +354,9 @@ const drawTrackMarker = (
 
       if (phase === 'foreground') {
         ctx.globalAlpha = 1.0;
-        ctx.fillStyle = theme.bg;
+        ctx.fillStyle = maskColor(ctx, theme);
         ctx.fill();
+        ctx.globalCompositeOperation = 'source-over';
 
         ctx.strokeStyle = theme.decoration;
         ctx.lineWidth = w;
@@ -363,7 +371,7 @@ const drawTrackMarker = (
         ctx.beginPath();
         ctx.arc(0, 0, lineWidth * 1.4 * markerScale, 0, math.TAU);
         ctx.globalAlpha = 1;
-        ctx.fillStyle = theme.bg;
+        ctx.fillStyle = maskColor(ctx, theme);
         ctx.fill();
       }
 
@@ -540,7 +548,7 @@ const drawVictoryAnimation = (
   return headProgress < 1;
 };
 
-type ClockTheme = {
+type CanvasTheme = {
   scheme: 'light' | 'dark';
   stroke: string;
   decoration: string;
@@ -549,8 +557,20 @@ type ClockTheme = {
   text: string;
 };
 
+type ClockTheme = CanvasTheme & { seeThrough: boolean };
+
+/**
+ * Prepare to mask out what's already drawn. Normally that means painting the background colour over
+ * it; with no background, erase instead so the mask stays see-through.
+ */
+const maskColor = (ctx: CanvasRenderingContext2D, theme: ClockTheme) => {
+  if (!theme.seeThrough) return theme.bg;
+  ctx.globalCompositeOperation = 'destination-out';
+  return '#000';
+};
+
 const useCanvasTheme = (canvas: HTMLCanvasElement | null, colorScheme: 'light' | 'dark') => {
-  const [theme, setTheme] = useState<ClockTheme | null>(null);
+  const [theme, setTheme] = useState<CanvasTheme | null>(null);
 
   useEffect(() => {
     if (!canvas) return;
