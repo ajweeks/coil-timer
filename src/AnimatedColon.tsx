@@ -21,6 +21,8 @@ export const AnimatedColon = ({ isRunning }: AnimatedColonProps) => {
           'absolute left-1/2 top-[43%] -translate-x-1/2 size-[0.125em]',
           'rounded-full bg-current',
           'animate-[colon-dot_1s_ease_infinite]',
+          // A hidden but running animation still makes the WebView composite every frame
+          !isRunning && '[animation-play-state:paused]',
         )}
       />
       <span
@@ -28,6 +30,7 @@ export const AnimatedColon = ({ isRunning }: AnimatedColonProps) => {
           'absolute left-1/2 top-[75%] -translate-x-1/2 size-[0.125em]',
           'rounded-full bg-current',
           'animate-[colon-dot_1s_0.5s_ease_infinite]',
+          !isRunning && '[animation-play-state:paused]',
         )}
       />
     </span>

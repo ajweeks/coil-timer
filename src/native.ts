@@ -7,6 +7,8 @@ const appWindow = () => getCurrentWindow();
 
 export const closeWindow = () => appWindow().close();
 
+export const minimizeWindow = () => appWindow().minimize();
+
 export const setAlwaysOnTop = (onTop: boolean) => appWindow().setAlwaysOnTop(onTop);
 
 export const toggleNativeFullscreen = async () => {

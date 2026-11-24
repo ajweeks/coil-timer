@@ -24,8 +24,6 @@ import {
 import { formatTime, Minutes, Seconds } from './time-utils';
 import { useNonPassiveWheelHandler } from './useNonPassiveWheelHandler';
 
-export const LABELS_DATALIST_ID = 'coil-time-labels';
-
 /** Attributes that stop browsers and password managers from offering autofill */
 export const NO_AUTOFILL = {
   autoComplete: 'off',
@@ -157,7 +155,6 @@ export const TimeLog = ({ ref, accounting, commit, undo, toast, showControls, on
       return m.set(key, (m.get(key) ?? 0) + liveMs(accounting, b, now));
     }, new Map<string, number>()),
   ];
-  const labels = [...new Set(blocks.map((b) => b.label?.trim()).filter(Boolean))] as string[];
 
   const split = () => {
     if (isEmpty(accounting, open)) return;
@@ -193,12 +190,6 @@ export const TimeLog = ({ ref, accounting, commit, undo, toast, showControls, on
       onPointerDown={(e) => e.stopPropagation()}
       onPointerMove={(e) => e.stopPropagation()}
     >
-      <datalist id={LABELS_DATALIST_ID}>
-        {labels.map((l) => (
-          <option key={l} value={l} />
-        ))}
-      </datalist>
-
       <div className="max-h-[40vh] overflow-y-auto flex flex-col gap-0.5">
         {[...blocks].reverse().map((block, i, rev) => (
           <BlockRow
@@ -346,7 +337,6 @@ const BlockRow = ({ block, accounting, now, canMerge, showControls, commit }: Bl
       <input
         type="text"
         {...NO_AUTOFILL}
-        list={LABELS_DATALIST_ID}
         value={block.label ?? ''}
         placeholder={open ? 'label…' : '—'}
         maxLength={150}

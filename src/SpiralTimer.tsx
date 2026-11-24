@@ -4,6 +4,7 @@ import {
   ClockFading,
   Ghost,
   HelpCircle,
+  Minus,
   PictureInPicture2,
   Pin,
   Scan,
@@ -20,6 +21,7 @@ import { JogDial, JogEvent } from './JogDial';
 import {
   closeWindow,
   isNative,
+  minimizeWindow,
   onWindowFocusChanged,
   setAlwaysOnTop,
   startDragging,
@@ -42,7 +44,7 @@ import {
   Seconds,
 } from './time-utils';
 import { accountTime, setLabel, withOpenBlock } from './TimeBlocks';
-import { LABELS_DATALIST_ID, NO_AUTOFILL, TimeLog, useTimeLogUndo } from './TimeLog';
+import { NO_AUTOFILL, TimeLog, useTimeLogUndo } from './TimeLog';
 import { TimerModel, TimerModelSchema } from './TimerModel';
 import { TimerRestorePoint } from './TimerRestorePoint';
 import {
@@ -674,7 +676,6 @@ const SpiralTimer = () => {
               ref={labelInputRef}
               type="text"
               {...NO_AUTOFILL}
-              list={LABELS_DATALIST_ID}
               value={openBlock.label ?? ''}
               onChange={(e) =>
                 timeLog.commit(setLabel(timerModel, openBlock.id, e.target.value), `label:${openBlock.id}`)
@@ -729,13 +730,27 @@ const SpiralTimer = () => {
         }}
       />
 
-      {/* ── Top-left toolbar (mode + restore) ── */}
-      <Toolbar ariaLabel="Timer controls" isVisible={showButtons}>
-        {isNative && (
-          <ToolbarButton onClick={() => closeWindow().catch(() => {})} aria-label="Close" title="Close">
-            <X size={24} />
+      {/* ── Top-right corner: window controls (desktop app only; there's no title bar) ── */}
+      {isNative && (
+        <nav
+          aria-label="Window controls"
+          className={clsx(
+            'absolute top-2 right-2 z-30 flex flex-row gap-3',
+            'transition-all duration-500',
+            showButtons ? 'opacity-50 hover:opacity-100 visible' : 'opacity-0 invisible',
+          )}
+        >
+          <ToolbarButton onClick={() => minimizeWindow().catch(() => {})} aria-label="Minimize" title="Minimize">
+            <Minus size={18} />
           </ToolbarButton>
-        )}
+          <ToolbarButton onClick={() => closeWindow().catch(() => {})} aria-label="Close" title="Close">
+            <X size={18} />
+          </ToolbarButton>
+        </nav>
+      )}
+
+      {/* ── Top-right toolbar (mode) — below the window controls in the desktop app ── */}
+      <Toolbar ariaLabel="Timer controls" isVisible={showButtons} position={isNative ? 'top-right-low' : 'top-right'}>
         <ToolbarButton
           onClick={toggleTimerMode}
           aria-label={`Switch to ${timerState.mode === 'hours' ? 'minutes' : 'hours'} mode`}
