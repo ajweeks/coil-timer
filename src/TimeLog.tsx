@@ -1,6 +1,6 @@
 import clsx from 'clsx';
 import { ChevronsDown, Plus, X } from 'lucide-react';
-import { Ref, useEffect, useRef, useState } from 'react';
+import { CSSProperties, Ref, useEffect, useRef, useState } from 'react';
 import {
   applyUndo,
   clearBlocks,
@@ -138,9 +138,20 @@ interface TimeLogProps {
   /** Called after a new block is started, e.g. to focus a label input */
   onSplit?: () => void;
   className?: string;
+  style?: CSSProperties;
 }
 
-export const TimeLog = ({ ref, accounting, commit, undo, toast, showControls, onSplit, className }: TimeLogProps) => {
+export const TimeLog = ({
+  ref,
+  accounting,
+  commit,
+  undo,
+  toast,
+  showControls,
+  onSplit,
+  className,
+  style,
+}: TimeLogProps) => {
   const now = useNow(accounting.runningSince != null);
 
   const blocks = withOpenBlock(accounting.blocks);
@@ -186,11 +197,13 @@ export const TimeLog = ({ ref, accounting, commit, undo, toast, showControls, on
       ref={ref}
       data-time-log
       className={clsx('flex flex-col gap-0.5 text-xs text-gray-500 dark:text-gray-400 select-none', className)}
+      style={style}
       onClick={(e) => e.stopPropagation()}
       onPointerDown={(e) => e.stopPropagation()}
       onPointerMove={(e) => e.stopPropagation()}
     >
-      <div className="max-h-[40vh] overflow-y-auto flex flex-col gap-0.5">
+      {/* No gap between rows: each row's controls fill its full height instead, so they're easier to hit */}
+      <div className="max-h-[40vh] overflow-y-auto flex flex-col">
         {[...blocks].reverse().map((block, i, rev) => (
           <BlockRow
             key={block.id}
@@ -295,8 +308,9 @@ const BlockRow = ({ block, accounting, now, canMerge, showControls, commit }: Bl
   };
 
   return (
-    <div className={clsx('flex items-center gap-2 group/row', open && 'text-gray-600 dark:text-gray-300')}>
-      <span className="w-10 shrink-0 font-mono tabular-nums text-gray-400 dark:text-gray-600">
+    <div className={clsx('flex items-stretch gap-1 group/row', open && 'text-gray-600 dark:text-gray-300')}>
+      {/* The start time is the first thing to go in a very narrow window */}
+      <span className="w-10 shrink-0 mr-1 self-center font-mono tabular-nums text-gray-400 dark:text-gray-600 max-[17rem]:hidden">
         {block.startedAt != null ? formatTime(block.startedAt) : ''}
       </span>
 
@@ -315,7 +329,7 @@ const BlockRow = ({ block, accounting, now, canMerge, showControls, commit }: Bl
           }}
           aria-label="Duration (e.g. 35, 1h5, 32:10, +5)"
           title="e.g. 35 · 1h5 · 32:10 · +5 · -2"
-          className="w-14 shrink-0 text-right font-mono tabular-nums bg-gray-100/70 dark:bg-white/10 rounded px-1 outline-none"
+          className="w-14 shrink-0 py-px text-right font-mono tabular-nums bg-gray-100/70 dark:bg-white/10 rounded px-1 outline-none"
         />
       ) : (
         <button
@@ -324,7 +338,7 @@ const BlockRow = ({ block, accounting, now, canMerge, showControls, commit }: Bl
           title="Click to edit, scroll to nudge"
           aria-label={`Duration ${formatClock(ms)}, click to edit`}
           className={clsx(
-            'w-14 shrink-0 text-right font-mono tabular-nums rounded px-1 cursor-text',
+            'w-14 shrink-0 py-px text-right font-mono tabular-nums rounded px-1 cursor-text',
             showControls && 'hover:bg-gray-100/50 dark:hover:bg-white/5',
             empty && 'text-gray-300 dark:text-gray-700',
           )}
@@ -352,7 +366,8 @@ const BlockRow = ({ block, accounting, now, canMerge, showControls, commit }: Bl
         aria-label="Block label"
         className={clsx(
           'bg-transparent border-none outline-none',
-          'w-28 min-w-0 truncate rounded px-1',
+          // Takes all the width the log has to spare, and gives it up first when space is tight
+          'flex-1 basis-28 min-w-8 truncate rounded px-1 py-px',
           'placeholder-gray-300 dark:placeholder-gray-700',
           showControls && 'hover:bg-gray-100/50 dark:hover:bg-white/5',
           'focus:bg-gray-100/70 dark:focus:bg-white/10',
@@ -360,21 +375,24 @@ const BlockRow = ({ block, accounting, now, canMerge, showControls, commit }: Bl
         )}
       />
 
+      {/* Each slot is kept even when its action doesn't apply, so the labels line up */}
       <span
         className={clsx(
-          'flex gap-0.5 opacity-0 group-hover/row:opacity-100 focus-within:opacity-100 transition-opacity',
+          'flex shrink-0 opacity-0 group-hover/row:opacity-100 focus-within:opacity-100 transition-opacity',
           !showControls && 'invisible',
         )}
       >
-        {canMerge && (
+        {canMerge ? (
           <RowAction
             onClick={() => commit(mergeIntoPrevious(accounting, block.id), 'merge')}
             title="Merge into previous block"
           >
             <ChevronsDown size={12} />
           </RowAction>
+        ) : (
+          <RowActionSpacer />
         )}
-        {!empty && (
+        {!empty ? (
           <RowAction
             onClick={() => commit(removeBlock(accounting, block.id, Date.now()), 'delete', 'Block deleted')}
             title="Delete block"
@@ -382,27 +400,37 @@ const BlockRow = ({ block, accounting, now, canMerge, showControls, commit }: Bl
           >
             <X size={12} />
           </RowAction>
+        ) : (
+          <RowActionSpacer />
         )}
       </span>
     </div>
   );
 };
 
+/** The whole slot is clickable (the full row height, and wider than the icon), not just the icon */
+const ROW_ACTION_SIZE = 'w-6 self-stretch';
+
 const RowAction = ({ className, ...props }: React.ButtonHTMLAttributes<HTMLButtonElement> & { title: string }) => (
   <button
     aria-label={props.title}
     className={clsx(
-      'p-0.5 rounded cursor-pointer text-gray-400 dark:text-gray-600 hover:text-gray-700 dark:hover:text-gray-200',
+      ROW_ACTION_SIZE,
+      'flex items-center justify-center rounded cursor-pointer',
+      'text-gray-400 dark:text-gray-600 hover:text-gray-700 dark:hover:text-gray-200',
+      'hover:bg-gray-100/50 dark:hover:bg-white/5',
       className,
     )}
     {...props}
   />
 );
 
+const RowActionSpacer = () => <span className={ROW_ACTION_SIZE} aria-hidden />;
+
 const LogButton = ({ className, ...props }: React.ButtonHTMLAttributes<HTMLButtonElement>) => (
   <button
     className={clsx(
-      'flex items-center gap-0.5 px-1 rounded text-[10px] cursor-pointer transition-colors',
+      'flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] cursor-pointer transition-colors',
       'text-gray-400 dark:text-gray-600 hover:text-gray-700 dark:hover:text-gray-200',
       'disabled:opacity-40 disabled:pointer-events-none',
       className,

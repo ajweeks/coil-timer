@@ -1,5 +1,6 @@
 import { useEffect } from 'react';
 import { isNative, requestAttention } from './native';
+import { isWindowFocused, subscribeWindowFocus } from './windowFocus';
 
 const ALERT_TITLE = '⏰ Time’s up';
 const BLINK_INTERVAL_MS = 1000;
@@ -15,11 +16,11 @@ const BLINK_INTERVAL_MS = 1000;
  * - Sets an app badge on the taskbar icon when running as an installed PWA.
  * - In the desktop app, asks the OS directly to flash the taskbar button.
  *
- * Everything is undone as soon as the window regains focus.
+ * Everything is undone as soon as the window becomes active again.
  */
 export const useAttention = (active: boolean) => {
   useEffect(() => {
-    if (!active || document.hasFocus()) return;
+    if (!active || isWindowFocused()) return;
 
     const originalTitle = document.title;
     let showAlert = true;
@@ -33,13 +34,19 @@ export const useAttention = (active: boolean) => {
     if (isNative) requestAttention().catch(() => {});
     else window.focus();
 
+    let stopped = false;
+    let unsubscribe = () => {};
     const stop = () => {
+      if (stopped) return;
+      stopped = true;
       clearInterval(blink);
       document.title = originalTitle;
       navigator.clearAppBadge?.().catch(() => {});
-      window.removeEventListener('focus', stop);
+      unsubscribe();
     };
-    window.addEventListener('focus', stop);
+    unsubscribe = subscribeWindowFocus(() => {
+      if (isWindowFocused()) stop();
+    });
     return stop;
   }, [active]);
 };

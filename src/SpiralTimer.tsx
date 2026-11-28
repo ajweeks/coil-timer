@@ -4,29 +4,19 @@ import {
   ClockFading,
   Ghost,
   HelpCircle,
-  Minus,
   PictureInPicture2,
   Pin,
   Scan,
   TimerReset,
   Volume2,
   VolumeX,
-  X,
 } from 'lucide-react';
 import { KeyboardEvent, useCallback, useEffect, useRef, useState } from 'react';
 import { AnimatedColon } from './AnimatedColon';
 import { ClockFace, ClockFaceHandle } from './ClockFace';
 import { HelpScreen } from './HelpScreen';
 import { JogDial, JogEvent } from './JogDial';
-import {
-  closeWindow,
-  isNative,
-  minimizeWindow,
-  onWindowFocusChanged,
-  setAlwaysOnTop,
-  startDragging,
-  toggleNativeFullscreen,
-} from './native';
+import { isNative, setAlwaysOnTop, startDragging, toggleNativeFullscreen } from './native';
 import { MenuItem, SettingsMenu } from './SettingsMenu';
 import { initAudioContext, playRingSound } from './sound-utils';
 import {
@@ -69,6 +59,8 @@ import { useMultiClick } from './useMultiClick';
 import { useNonPassiveWheelHandler } from './useNonPassiveWheelHandler';
 import { useTemporaryState } from './useTemporaryState';
 import { useWakeLock } from './useWakeLock';
+import { WINDOW_CONTROLS_HEIGHT, WINDOW_CONTROLS_WIDTH, WindowControls } from './WindowControls';
+import { useIsWindowAway } from './windowFocus';
 
 // Interaction state for timer duration adjustments
 interface TimerInteraction {
@@ -142,42 +134,19 @@ const SpiralTimer = () => {
   const [jogDial, setJogDial] = useState<HTMLButtonElement | null>(null);
   const [clockFace, setClockFace] = useState<ClockFaceHandle | null>(null);
   const [wasModeRecentlyChanged, setWasModeRecentlyChanged] = useTemporaryState(false, 2 * Seconds);
-  const [mustShowControls, setMustShowControls] = useTemporaryState(false, 5 * Seconds);
   const [isHelpVisible, setIsHelpVisible] = useState(false);
   const [clockRadius, setClockRadius] = useState<number | null>(null);
   const [timeLogEl, setTimeLogEl] = useState<HTMLDivElement | null>(null);
   const timeLogSize = useElementSize(timeLogEl);
   const viewport = useViewportSize();
 
-  // Track window focus — used to hide decorative UI after a delay when window loses focus
-  const [windowFocused, setWindowFocused] = useState(true);
-  useEffect(() => {
-    let blurTimer: ReturnType<typeof setTimeout>;
-    const onFocus = () => {
-      clearTimeout(blurTimer);
-      setWindowFocused(true);
-    };
-    const onBlur = () => {
-      blurTimer = setTimeout(() => setWindowFocused(false), 3000);
-    };
-    window.addEventListener('focus', onFocus);
-    window.addEventListener('blur', onBlur);
-    // In the desktop app, also follow the native window (see onWindowFocusChanged)
-    const unlisten = isNative
-      ? onWindowFocusChanged((focused) => (focused ? onFocus() : onBlur())).catch(() => null)
-      : null;
-    return () => {
-      clearTimeout(blurTimer);
-      window.removeEventListener('focus', onFocus);
-      window.removeEventListener('blur', onBlur);
-      unlisten?.then((fn) => fn?.());
-    };
-  }, []);
+  // A few seconds after the window stops being the active one, UI meant for interaction fades away
+  const isAway = useIsWindowAway();
   const [isMuted, setIsMuted] = useStoredFlag('coil-timer-muted');
   const [isSeeThroughEnabled, setIsSeeThroughEnabled] = useStoredFlag('coil-timer-see-through');
-  // When unfocused, drop the background so only the coil, label and time remain. Only the desktop app
+  // When away, drop the background so only the coil, label and time remain. Only the desktop app
   // has a transparent window; in a browser there'd be nothing to see through to.
-  const isSeeThrough = isNative && isSeeThroughEnabled && !windowFocused && !isHelpVisible;
+  const isSeeThrough = isNative && isSeeThroughEnabled && isAway && !isHelpVisible;
   const [isAlwaysOnTop, setIsAlwaysOnTop] = useStoredFlag('coil-timer-always-on-top');
   useEffect(() => {
     if (isNative) setAlwaysOnTop(isAlwaysOnTop).catch(() => {});
@@ -185,7 +154,8 @@ const SpiralTimer = () => {
   useEffect(() => {
     document.documentElement.classList.toggle('see-through', isSeeThrough);
   }, [isSeeThrough]);
-  const clockTop = clockOffsetForLog(viewport, timeLogSize);
+  const timeLogTop = timeLogOffset(viewport, timeLogSize);
+  const clockTop = clockOffsetForLog(viewport, timeLogSize, timeLogTop);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
 
   useWakeLock({ enable: timerState.is === 'running' });
@@ -198,10 +168,6 @@ const SpiralTimer = () => {
   useEffect(() => {
     setWasModeRecentlyChanged(true);
   }, [timerState.mode, setWasModeRecentlyChanged]);
-
-  useEffect(() => {
-    setMustShowControls(true);
-  }, [timerState.is, setMustShowControls]);
 
   // (Bell is played directly in runFrame at the running→postFinished transition)
 
@@ -428,10 +394,7 @@ const SpiralTimer = () => {
   // ── Misc handlers ─────────────────────────────────────────────────────────
 
   const handleBackgroundClicks = useMultiClick({
-    single: () => {
-      initAudioContext();
-      setMustShowControls((value) => !value);
-    },
+    single: () => initAudioContext(),
     double: () => toggleFullscreen(),
     interval: 250 * Milliseconds,
   });
@@ -517,10 +480,9 @@ const SpiralTimer = () => {
 
   // ── Derived state ─────────────────────────────────────────────────────────
 
-  const controlsAreVisible = timerState.is === 'paused' || mustShowControls || timerState.is === 'postFinished';
-  // When the window isn't focused, show only the clock and the time log
-  // An open settings menu stays up until it's dismissed, even while the timer runs
-  const showButtons = (controlsAreVisible || isSettingsOpen) && !isHelpVisible && windowFocused;
+  // Buttons are always there while the window is in use. When away, show only the clock and the time log
+  // (and the window controls, in the desktop app)
+  const showButtons = !isHelpVisible && !isAway;
   const hint = timerState.is === 'interacting' ? 'end-time' : wasModeRecentlyChanged ? 'precision' : null;
 
   const blocks = withOpenBlock(timerModel.blocks);
@@ -620,7 +582,7 @@ const SpiralTimer = () => {
           >
             <span ref={setTimeEl} />
             <span className="pointer-events-none inline-block w-0 flex items-baseline">
-              <AnimatedColon isRunning={timerState.is === 'running' && windowFocused} />
+              <AnimatedColon isRunning={timerState.is === 'running' && !isAway} />
             </span>
           </span>
 
@@ -687,11 +649,11 @@ const SpiralTimer = () => {
               }}
               onKeyDown={handleSessionNameKeyDown}
               aria-label="Label for the current block"
-              placeholder={windowFocused ? 'What are you working on?' : ''}
+              placeholder={isAway ? '' : 'What are you working on?'}
               maxLength={150}
               // Size to the text so the input doesn't cover (and swallow clicks on) the dial
               style={{
-                width: `${(openBlock.label || (windowFocused ? 'What are you working on?' : '')).length + 2}ch`,
+                width: `${(openBlock.label || (isAway ? '' : 'What are you working on?')).length + 2}ch`,
               }}
               className={clsx(
                 'min-w-12 max-w-56 text-center bg-transparent',
@@ -712,7 +674,6 @@ const SpiralTimer = () => {
       {/* ── Help overlay ── */}
       <HelpScreen
         isHelpVisible={isHelpVisible}
-        bgAction={timerState.is === 'running' ? 'controls' : null}
         jogDialAction={
           timerState.is === 'interacting'
             ? null
@@ -731,23 +692,8 @@ const SpiralTimer = () => {
       />
 
       {/* ── Top-right corner: window controls (desktop app only; there's no title bar) ── */}
-      {isNative && (
-        <nav
-          aria-label="Window controls"
-          className={clsx(
-            'absolute top-2 right-2 z-30 flex flex-row gap-3',
-            'transition-all duration-500',
-            showButtons ? 'opacity-50 hover:opacity-100 visible' : 'opacity-0 invisible',
-          )}
-        >
-          <ToolbarButton onClick={() => minimizeWindow().catch(() => {})} aria-label="Minimize" title="Minimize">
-            <Minus size={18} />
-          </ToolbarButton>
-          <ToolbarButton onClick={() => closeWindow().catch(() => {})} aria-label="Close" title="Close">
-            <X size={18} />
-          </ToolbarButton>
-        </nav>
-      )}
+      {/* Always there, except when see-through: the window would be hard to close or minimize otherwise */}
+      {isNative && <WindowControls isVisible={!isSeeThrough} />}
 
       {/* ── Top-right toolbar (mode) — below the window controls in the desktop app ── */}
       <Toolbar ariaLabel="Timer controls" isVisible={showButtons} position={isNative ? 'top-right-low' : 'top-right'}>
@@ -773,15 +719,7 @@ const SpiralTimer = () => {
       </Toolbar>
 
       {/* ── Bottom-left: settings menu ── */}
-      <SettingsMenu
-        isVisible={showButtons}
-        isOpen={isSettingsOpen}
-        onOpenChange={(open) => {
-          setIsSettingsOpen(open);
-          // Leave the controls up for a moment after closing, rather than vanishing with the menu
-          if (!open) setMustShowControls(true);
-        }}
-      >
+      <SettingsMenu isVisible={showButtons} isOpen={isSettingsOpen} onOpenChange={setIsSettingsOpen}>
         <MenuItem
           icon={isMuted ? <VolumeX /> : <Volume2 />}
           label="Sound"
@@ -823,13 +761,17 @@ const SpiralTimer = () => {
       {/* Always mounted (it hides itself when empty) so undo and the N shortcut survive */}
       <TimeLog
         ref={setTimeLogEl}
+        style={{ top: timeLogTop }}
         className={clsx(
-          'absolute top-4 left-4 z-20 transition-opacity duration-500',
+          'absolute left-4 z-20 transition-opacity duration-500',
+          // Clear of the toolbar down the right-hand side (1.5rem inset + 1.5rem buttons + a gap), unless
+          // the window is so narrow that the log's own buttons would be cut off instead
+          'max-w-[calc(100vw-1rem-3.5rem)] max-[15rem]:max-w-[calc(100vw-2rem)]',
           isHelpVisible && 'hidden',
           // Keep its layout (the clock is positioned around it) but hide it in see-through mode
           isSeeThrough && 'opacity-0 invisible',
         )}
-        showControls={windowFocused}
+        showControls={!isAway}
         accounting={timerModel}
         commit={timeLog.commit}
         undo={timeLog.undo}
@@ -897,14 +839,25 @@ const formatTotalDuration = (ms: number): string => {
 const TIME_LOG_INSET = 16;
 const TIME_LOG_GAP = 12;
 
+/**
+ * How far down the time log starts. In the desktop app the window controls take the top-right corner,
+ * like a title bar: the log stays level with them if there's room beside them, or else moves below them.
+ * Either way its width is the same, so moving it can't change whether it fits.
+ */
+const timeLogOffset = (viewport: Size, log: Size): number => {
+  if (!isNative) return TIME_LOG_INSET;
+  const fitsBeside = TIME_LOG_INSET + log.width + TIME_LOG_GAP <= viewport.width - WINDOW_CONTROLS_WIDTH;
+  return fitsBeside ? TIME_LOG_INSET : WINDOW_CONTROLS_HEIGHT + 4;
+};
+
 /** How far to push the clock down so it doesn't overlap the time log (0 if there's room beside it). */
-const clockOffsetForLog = (viewport: Size, log: Size): number => {
+const clockOffsetForLog = (viewport: Size, log: Size, logTop: number): number => {
   if (log.width === 0 || log.height === 0) return 0;
   const radius = (Math.min(viewport.width, viewport.height) / 2) * 0.9; // ClockFace's outer tick diameter
   const cx = viewport.width / 2;
   const cy = viewport.height / 2;
   const right = TIME_LOG_INSET + log.width;
-  const bottom = TIME_LOG_INSET + log.height;
+  const bottom = logTop + log.height;
   // Distance from the clock's center to the nearest point of the log's box
   const dx = cx - Math.min(cx, right);
   const dy = cy - Math.min(cy, bottom);

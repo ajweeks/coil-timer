@@ -8,12 +8,11 @@ import { Second } from './time-utils';
 
 type HelpScreenProps = {
   isHelpVisible: boolean;
-  bgAction: 'controls' | null;
   jogDialAction: 'pause' | 'resume' | 'reset' | null;
   onCloseClicked: () => void;
 };
 
-export const HelpScreen = ({ isHelpVisible, bgAction, jogDialAction, onCloseClicked }: HelpScreenProps) => {
+export const HelpScreen = ({ isHelpVisible, jogDialAction, onCloseClicked }: HelpScreenProps) => {
   const device = useDeviceCapabilities();
   const [closeButton, setCloseButton] = useState<HTMLButtonElement | null>(null);
   const [isHiding, setIsHiding] = useTemporaryState(false, 1 * Second);
@@ -65,7 +64,8 @@ export const HelpScreen = ({ isHelpVisible, bgAction, jogDialAction, onCloseClic
             aria-label="Dismiss help"
             title="Dismiss"
             className={clsx(
-              'absolute top-6 right-6',
+              // Where the mode button is: in the desktop app, below the window controls
+              isNative ? 'absolute top-12 right-6' : 'absolute top-6 right-6',
               'cursor-pointer text-gray-700 dark:text-gray-400',
               isHelpVisible && 'pointer-events-auto',
             )}
@@ -106,10 +106,6 @@ export const HelpScreen = ({ isHelpVisible, bgAction, jogDialAction, onCloseClic
           <div className={clsx('absolute top-6 left-6')}>
             <h2 className="text-lg text-gray-800 dark:text-gray-300 mb-2">Background</h2>
             <ul>
-              <li>
-                <strong>{device.isTouchDevice ? 'Tap' : 'Click'}:</strong>{' '}
-                {bgAction === 'controls' ? <>hide/show controls</> : <>hide/show controls (when running)</>}
-              </li>
               <li>
                 <strong>{device.isTouchDevice ? 'Tap-tap' : 'Double-click'}:</strong> enter fullscreen
               </li>

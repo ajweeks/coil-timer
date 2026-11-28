@@ -350,9 +350,11 @@ dependencies = [
 name = "coil"
 version = "1.0.0"
 dependencies = [
+ "serde",
  "tauri",
  "tauri-build",
  "tauri-plugin-window-state",
+ "windows",
 ]
 
 [[package]]
